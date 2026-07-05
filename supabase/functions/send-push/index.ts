@@ -1,16 +1,11 @@
 // ============================================================================
-//  send-push  —  Supabase Edge Function (Deno)
-//
-//  Fires from a Database Webhook on INSERT into public.questions and pushes a
-//  Web Push notification to everyone whose preferences match the new question:
-//    • every_question = true              ("All, so I don't miss a thing")
-//    • flair ∈ their categories[]         (per-category opt-in)
-//    • followed_only and they follow the author
-//
-//  Deploy:   supabase functions deploy send-push --no-verify-jwt
-//  Secrets:  supabase secrets set VAPID_PUBLIC_KEY=... VAPID_PRIVATE_KEY=... \
-//                                 VAPID_SUBJECT=mailto:you@quandary.app
-//  (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are injected automatically.)
+//  send-push — Supabase Edge Function (Deno)
+//  Handles four event types (sent by database triggers):
+//    question      -> fan out to everyone whose prefs match
+//    reply         -> notify the question's author
+//    clarif        -> notify the question's author (context requested)
+//    clarif_answer -> notify the person who asked the clarifying question
+//  Logs each step so Edge Functions → Logs shows exactly what happened.
 // ============================================================================
 import { createClient } from "npm:@supabase/supabase-js@2";
 import webpush from "npm:web-push@3.6.7";
@@ -26,70 +21,117 @@ const admin = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
 );
 
-webpush.setVapidDetails(
-  Deno.env.get("VAPID_SUBJECT")!,
-  Deno.env.get("VAPID_PUBLIC_KEY")!,
-  Deno.env.get("VAPID_PRIVATE_KEY")!,
-);
+const name = async (id: string) => {
+  const { data } = await admin.from("profiles").select("name").eq("id", id).single();
+  return data?.name ?? "Someone";
+};
 
-Deno.serve(async (req) => {
-  const { record: q } = await req.json();
-  if (!q?.id) return new Response("no record", { status: 400 });
+const question = async (id: string) => {
+  const { data } = await admin.from("questions")
+    .select("id, title, flair, author_id").eq("id", id).single();
+  return data;
+};
 
-  // author (for the notification copy + to exclude from recipients)
-  const { data: author } = await admin
-    .from("profiles").select("name").eq("id", q.author_id).single();
-
-  // who follows the author
-  const { data: followerRows } = await admin
-    .from("follows").select("follower_id").eq("followee_id", q.author_id);
-  const followers = new Set((followerRows ?? []).map((r) => r.follower_id));
-
-  // resolve recipients from preferences
-  const { data: prefs } = await admin
-    .from("notification_prefs")
-    .select("user_id, every_question, followed_only, categories");
-
-  const recipients = (prefs ?? [])
-    .filter((p) =>
-      p.user_id !== q.author_id && (
-        p.every_question ||
-        (p.categories ?? []).includes(q.flair) ||
-        (p.followed_only && followers.has(p.user_id))
-      )
-    )
-    .map((p) => p.user_id);
-
-  if (recipients.length === 0) return new Response("no recipients", { status: 200 });
-
-  // gather their devices
+async function sendToUsers(userIds: string[], payload: string) {
+  if (userIds.length === 0) { console.log("no recipients"); return 0; }
   const { data: subs } = await admin
     .from("push_subscriptions")
-    .select("id, endpoint, p256dh, auth")
-    .in("user_id", recipients);
+    .select("id, endpoint, p256dh, auth, user_agent")
+    .in("user_id", userIds);
+  console.log("devices to notify:", subs?.length ?? 0);
 
-  const payload = JSON.stringify({
-    title: `${author?.name ?? "Someone"} asked a ${FLAIR_LABEL[q.flair] ?? "question"}`,
-    body: q.title,
-    url: `/q/${q.id}`,
-  });
-
-  // send, pruning any subscription the push service has retired
+  let ok = 0;
   const dead: string[] = [];
-  await Promise.all((subs ?? []).map(async (s) => {
+  for (const s of subs ?? []) {
     try {
       await webpush.sendNotification(
         { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
         payload,
       );
+      ok++;
+      console.log("  ✓ sent to", (s.user_agent || "device").slice(0, 40));
     } catch (err) {
       const code = (err as { statusCode?: number }).statusCode;
+      console.error("  ✗ FAILED — status", code, "—", (err as Error).message || String(err));
       if (code === 404 || code === 410) dead.push(s.id);
     }
-  }));
+  }
   if (dead.length) await admin.from("push_subscriptions").delete().in("id", dead);
+  console.log("done. sent:", ok, "| pruned dead:", dead.length);
+  return ok;
+}
 
-  return new Response(JSON.stringify({ sent: (subs?.length ?? 0) - dead.length }), {
-    headers: { "Content-Type": "application/json" },
-  });
+const payload = (title: string, body: string) =>
+  JSON.stringify({ title, body, url: "/" });
+
+Deno.serve(async (req) => {
+  try {
+    const body = await req.json();
+    const type = body.type || "question"; // older question trigger sends no type
+    const rec = body.record;
+    console.log("invoked — type:", type, "record:", rec?.id);
+    if (!rec) return new Response("no record", { status: 400 });
+
+    const pub = Deno.env.get("VAPID_PUBLIC_KEY");
+    const priv = Deno.env.get("VAPID_PRIVATE_KEY");
+    const subj = Deno.env.get("VAPID_SUBJECT");
+    if (!pub || !priv || !subj) {
+      console.error("Missing VAPID secrets.");
+      return new Response("missing vapid", { status: 500 });
+    }
+    webpush.setVapidDetails(subj, pub, priv);
+
+    let sent = 0;
+
+    if (type === "question") {
+      const author = await name(rec.author_id);
+      const { data: followerRows } = await admin
+        .from("follows").select("follower_id").eq("followee_id", rec.author_id);
+      const followers = new Set((followerRows ?? []).map((r) => r.follower_id));
+      const { data: prefs } = await admin
+        .from("notification_prefs")
+        .select("user_id, every_question, followed_only, categories");
+      const recipients = (prefs ?? [])
+        .filter((p) => p.user_id !== rec.author_id && (
+          p.every_question ||
+          (p.categories ?? []).includes(rec.flair) ||
+          (p.followed_only && followers.has(p.user_id))
+        ))
+        .map((p) => p.user_id);
+      console.log("question recipients:", recipients.length);
+      sent = await sendToUsers(recipients,
+        payload(`${author} asked a ${FLAIR_LABEL[rec.flair] ?? "question"}`, rec.title));
+
+    } else if (type === "reply") {
+      const q = await question(rec.question_id);
+      if (q && q.author_id !== rec.author_id) {
+        const actor = await name(rec.author_id);
+        sent = await sendToUsers([q.author_id],
+          payload(`${actor} replied to your question`, `"${q.title}" — ${rec.body}`.slice(0, 160)));
+      } else console.log("reply by the author themselves — skipping");
+
+    } else if (type === "clarif") {
+      const q = await question(rec.question_id);
+      if (q && q.author_id !== rec.asker_id) {
+        const actor = await name(rec.asker_id);
+        sent = await sendToUsers([q.author_id],
+          payload(`${actor} asked for more context`, `On "${q.title}": ${rec.body}`.slice(0, 160)));
+      }
+
+    } else if (type === "clarif_answer") {
+      const q = await question(rec.question_id);
+      if (q && rec.asker_id !== q.author_id) {
+        const actor = await name(q.author_id);
+        sent = await sendToUsers([rec.asker_id],
+          payload(`${actor} answered your clarifying question`, `${rec.answer_body}`.slice(0, 160)));
+      }
+    }
+
+    return new Response(JSON.stringify({ type, sent }), {
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (e) {
+    console.error("FATAL:", (e as Error).message || String(e));
+    return new Response(JSON.stringify({ error: (e as Error).message }), { status: 500 });
+  }
 });

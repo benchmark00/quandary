@@ -6,7 +6,7 @@ import {
   Share, ArrowRight, Crown, Pencil,
 } from "lucide-react";
 import { supabase } from "./lib/supabase.js";
-import { enablePush, pushSupported } from "./lib/push.js";
+import { enablePush, pushSupported, isStandalone } from "./lib/push.js";
 
 /* ================================================================== *
  *  QUANDARY  —  Every hypothetical deserves an answer.
@@ -208,10 +208,12 @@ export default function Quandary() {
       setMe(user.id);
 
       const [{ data: profiles }, { data: baseQs }] = await Promise.all([
-        supabase.from("profiles").select("id, name, handle, color"),
+        supabase.from("profiles").select("id, name, handle, color, onboarded"),
         supabase.from("questions").select("id, author_id, flair, format, title, body, anonymous, created_at").eq("hidden", false),
       ]);
       (profiles || []).forEach((p) => { PROFILES[p.id] = p; });
+      const myProfile = (profiles || []).find((p) => p.id === user.id);
+      setOnboarded(myProfile ? myProfile.onboarded === true : true);
 
       const ids = (baseQs || []).map((q) => q.id);
       const inIds = ids.length ? ids : ["00000000-0000-0000-0000-000000000000"];
@@ -400,7 +402,12 @@ export default function Quandary() {
 
   if (loading) return (<div className="q-root"><Style /><div className="phone"><div className="boot"><Logo size={54} /><div>Loading Quandary…</div></div></div></div>);
   if (error) return (<div className="q-root"><Style /><div className="phone"><div className="boot"><div className="booterr">{error}</div><button className="bootbtn" onClick={() => { setLoading(true); loadAll(); }}>Try again</button></div></div></div>);
-  if (!onboarded) return (<div className="q-root"><Style /><div className="phone"><Onboarding onDone={() => setOnboarded(true)} prefs={prefs} setPrefs={setPrefsPersist} /></div></div>);
+  const finishOnboarding = () => {
+    setOnboarded(true);
+    supabase.from("profiles").update({ onboarded: true }).eq("id", me)
+      .then(({ error }) => { if (error) console.error("Couldn't save onboarding state:", error.message); });
+  };
+  if (!onboarded) return (<div className="q-root"><Style /><div className="phone"><Onboarding onDone={finishOnboarding} prefs={prefs} setPrefs={setPrefsPersist} /></div></div>);
 
   return (
     <div className="q-root">
@@ -865,13 +872,24 @@ function Alerts({ activity, prefs, updatePrefs, onOpen }) {
   const setFollowed = (on) => updatePrefs({ ...prefs, followed: on, every: on ? false : prefs.every });
   const [pushState, setPushState] = useState("idle");
   const [pushMsg, setPushMsg] = useState("");
+  const isIOS = /iphone|ipad|ipod/i.test(typeof navigator !== "undefined" ? navigator.userAgent : "");
   useEffect(() => {
-    if (!pushSupported()) setPushState("unsupported");
+    if (isIOS && !isStandalone()) { setPushState("ios-install"); return; }
+    if (!pushSupported()) { setPushState("unsupported"); return; }
   }, []);
   const turnOn = async () => {
     setPushMsg(""); setPushState("working");
     try { await enablePush(); setPushState("on"); setPushMsg("Subscribed on this device."); }
-    catch (e) { setPushState("error"); setPushMsg(e.message || "Couldn't enable notifications."); }
+    catch (e) {
+      setPushState("error");
+      if (typeof Notification !== "undefined" && Notification.permission === "denied") {
+        setPushMsg(isIOS
+          ? "Notifications are blocked for Quandary. Open iPhone Settings → Notifications → Quandary, turn on Allow Notifications, then come back and tap Enable again."
+          : "Notifications are blocked for this site in your browser settings. Allow them for this site, reload, and tap Enable again.");
+      } else {
+        setPushMsg(e.message || "Couldn't enable notifications.");
+      }
+    }
   };
   const line = (a) => {
     const n = userById(a.userId).name;
@@ -883,7 +901,9 @@ function Alerts({ activity, prefs, updatePrefs, onOpen }) {
       <div className="prefbox">
         <div className="prefhead"><Bell size={16} /> Push notifications</div>
         <p className="prefnote">Get pinged when a new question drops. <em>On iPhone this works once Quandary is on your home screen.</em></p>
-        {pushState === "unsupported"
+        {pushState === "ios-install"
+          ? <div className="push-hint"><b>One step first:</b> notifications on iPhone only work from the installed app. Tap Safari's <b>Share</b> button → <b>Add to Home Screen</b> → <b>Add</b>, then open Quandary from the new icon and enable notifications here.</div>
+          : pushState === "unsupported"
           ? <div className="push-hint">This browser can't do web push yet. On iPhone, add Quandary to your home screen first, then enable here.</div>
           : pushState === "on"
             ? <div className="push-on"><Check size={15} /> Notifications are on for this device</div>
@@ -953,6 +973,13 @@ function Style() {
   --disp:'Fredoka',system-ui,sans-serif; --body:'Plus Jakarta Sans',system-ui,sans-serif;
   display:flex; justify-content:center; align-items:flex-start; min-height:100vh;
   background:linear-gradient(180deg,#EDEBFF 0%, #F4F2FF 40%, #FCFBFF 100%); font-family:var(--body);
+}
+/* Lock the page itself so only the feed scrolls — keeps the tab bar pinned,
+   including in iOS Safari where the browser toolbar collapses. */
+html, body{height:100%; margin:0; overflow:hidden; overscroll-behavior:none;}
+@media(max-width:479px){
+  .q-root{position:fixed; inset:0; overflow:hidden; min-height:0;}
+  .phone{height:100%;}
 }
 .q-root *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
 .phone{position:relative; width:100%; max-width:430px; height:100dvh; background:var(--lav);
@@ -1138,7 +1165,7 @@ function Style() {
 .es-body{font-size:14px; line-height:1.5;}
 
 /* tabbar */
-.tabbar{position:absolute; bottom:0; left:0; right:0; display:flex; background:rgba(255,255,255,.94); backdrop-filter:blur(12px); border-top:1px solid var(--line); padding:8px 0 12px;}
+.tabbar{position:absolute; bottom:0; left:0; right:0; display:flex; background:rgba(255,255,255,.94); backdrop-filter:blur(12px); border-top:1px solid var(--line); padding:8px 0 max(12px, env(safe-area-inset-bottom));}
 .tabbtn{flex:1; background:none; border:none; color:var(--muted); display:flex; flex-direction:column; align-items:center; gap:3px; cursor:pointer; font-size:10.5px; font-weight:600; font-family:var(--body);}
 .tabbtn.active{color:var(--purple);}
 
