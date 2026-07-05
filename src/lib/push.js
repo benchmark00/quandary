@@ -28,6 +28,16 @@ export async function enablePush() {
   if (permission !== "granted") throw new Error("Notifications were not allowed.");
 
   const reg = await navigator.serviceWorker.ready;
+
+  // If this device already holds a subscription (possibly registered under a
+  // different account previously), discard it and mint a fresh one. A fresh
+  // endpoint can't collide with any other account's row.
+  const existing = await reg.pushManager.getSubscription();
+  if (existing) {
+    try { await supabase.from("push_subscriptions").delete().eq("endpoint", existing.endpoint); } catch { /* not ours — fine */ }
+    try { await existing.unsubscribe(); } catch { /* already gone — fine */ }
+  }
+
   const sub = await reg.pushManager.subscribe({
     userVisibleOnly: true,
     applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
