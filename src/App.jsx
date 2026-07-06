@@ -193,6 +193,8 @@ export default function Quandary() {
   const [prefs, setPrefs] = useState({ every: false, followed: true, cats: new Set() });
   const [me, setMe] = useState(null);
   const [qotdId, setQotdId] = useState(null);
+  const [viewUser, setViewUser] = useState(null);       // whose profile sheet is open
+  const [viewUserTab, setViewUserTab] = useState("questions");
   const [followerCount, setFollowerCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -359,6 +361,14 @@ export default function Quandary() {
       flash(has ? `Unfollowed ${userById(uId).name}` : `Following ${userById(uId).name}`);
     } catch (e) { flash(e.message); }
   };
+  // Open any user's profile sheet (optionally landing on a specific tab).
+  const openUser = (userId, tab = "questions") => {
+    if (!userId) return;
+    setOpen(null);
+    setViewUserTab(tab);
+    setViewUser(userId);
+  };
+
   const editQuestion = async (qId, title, body) => {
     try {
       const { error } = await supabase.from("questions").update({ title, body }).eq("id", qId);
@@ -424,12 +434,12 @@ export default function Quandary() {
           {tab === "feed" && (
             <Feed list={visible} qotd={filter === "all" && sort !== "following" ? questions.find((q) => q.id === qotdId) : null}
               filter={filter} setFilter={setFilter} sort={sort} setSort={setSort}
-              saved={saved} following={following} onOpen={setOpen} onSave={toggleSave} onFollow={toggleFollow} me={me} />
+              saved={saved} following={following} onOpen={setOpen} onSave={toggleSave} onFollow={toggleFollow} onUser={openUser} me={me} />
           )}
           {tab === "create" && <Create onPost={createQuestion} me={me} />}
-          {tab === "saved" && <Saved list={questions.filter((q) => saved.has(q.id))} onOpen={setOpen} saved={saved} onSave={toggleSave} following={following} onFollow={toggleFollow} me={me} />}
-          {tab === "alerts" && <Alerts activity={activity} prefs={prefs} updatePrefs={updatePrefs} onOpen={setOpen} />}
-          {tab === "you" && <Profile me={me} questions={questions} following={following} followerCount={followerCount} onFollow={toggleFollow} onOpen={setOpen} replay={() => setOnboarded(false)} />}
+          {tab === "saved" && <Saved list={questions.filter((q) => saved.has(q.id))} onOpen={setOpen} saved={saved} onSave={toggleSave} following={following} onFollow={toggleFollow} onUser={openUser} me={me} />}
+          {tab === "alerts" && <Alerts activity={activity} prefs={prefs} updatePrefs={updatePrefs} onOpen={setOpen} onUser={openUser} />}
+          {tab === "you" && <Profile me={me} questions={questions} following={following} followerCount={followerCount} onFollow={toggleFollow} onOpen={setOpen} onUser={openUser} replay={() => setOnboarded(false)} />}
         </main>
 
         <nav className="tabbar">
@@ -444,9 +454,16 @@ export default function Quandary() {
           <Detail q={openQ} me={me} following={following} saved={saved} onClose={() => setOpen(null)}
             onVote={vote} onRate={rate} onReply={reply} onReport={report} onSave={toggleSave} onFollow={toggleFollow}
             onAskClarif={askClarif} onAnswerClarif={answerClarif}
-            onEdit={editQuestion} onDelete={deleteQuestion} />
+            onEdit={editQuestion} onDelete={deleteQuestion} onOpenUser={openUser} />
         )}
         {searchOpen && <SearchOverlay questions={questions} onClose={() => setSearchOpen(false)} onOpen={(id) => { setSearchOpen(false); setOpen(id); }} />}
+        {viewUser && (
+          <UserProfile userId={viewUser} me={me} questions={questions} following={following}
+            initialTab={viewUserTab} onFollow={toggleFollow}
+            onOpenQuestion={(id) => { setViewUser(null); setOpen(id); }}
+            onOpenUser={(id, tab) => openUser(id, tab)}
+            onClose={() => setViewUser(null)} />
+        )}
         {toast && <div className="toast">{toast}</div>}
       </div>
     </div>
@@ -575,7 +592,7 @@ function SearchOverlay({ questions, onClose, onOpen }) {
 }
 
 /* ---------- FEED ---------- */
-function Feed({ list, qotd, filter, setFilter, sort, setSort, saved, following, onOpen, onSave, onFollow, me }) {
+function Feed({ list, qotd, filter, setFilter, sort, setSort, saved, following, onOpen, onSave, onFollow, onUser, me }) {
   return (
     <>
       <div className="sortrow">
@@ -597,7 +614,7 @@ function Feed({ list, qotd, filter, setFilter, sort, setSort, saved, following, 
       ) : (
         <div className="cards">
           {list.map((q) => <Card key={q.id} q={q} me={me} saved={saved.has(q.id)} isFollowing={following.has(q.authorId)}
-            onOpen={() => onOpen(q.id)} onSave={() => onSave(q.id)} onFollow={() => onFollow(q.authorId)} />)}
+            onOpen={() => onOpen(q.id)} onSave={() => onSave(q.id)} onFollow={() => onFollow(q.authorId)} onUser={onUser} />)}
         </div>
       )}
     </>
@@ -621,16 +638,16 @@ function Qotd({ q, onOpen }) {
   );
 }
 
-function Card({ q, me, saved, isFollowing, onOpen, onSave, onFollow }) {
+function Card({ q, me, saved, isFollowing, onOpen, onSave, onFollow, onUser }) {
   const f = FLAIRS[q.flair]; const Icon = f.icon;
   const votes = totalVotes(q); const a = avg(q.ratings); const author = userById(q.authorId);
   return (
     <article className="card" onClick={onOpen} style={{ "--accent": f.tint }}>
       <div className="card-top">
-        <div className="byline">
+        <button className="byline as-btn" onClick={(e) => { e.stopPropagation(); onUser && onUser(q.authorId); }}>
           <Avatar id={q.authorId} />
           <div className="byline-txt"><span className="name">{author.name}</span><span className="meta">@{author.handle} · {ago(q.ts)}</span></div>
-        </div>
+        </button>
         {q.authorId !== me && (
           <button className={"followmini" + (isFollowing ? " on" : "")} onClick={(e) => { e.stopPropagation(); onFollow(); }} aria-label="Follow">
             {isFollowing ? <UserCheck size={14} /> : <UserPlus size={14} />}
@@ -653,7 +670,7 @@ function Card({ q, me, saved, isFollowing, onOpen, onSave, onFollow }) {
 }
 
 /* ---------- DETAIL ---------- */
-function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onReport, onSave, onFollow, onAskClarif, onAnswerClarif, onEdit, onDelete }) {
+function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onReport, onSave, onFollow, onAskClarif, onAnswerClarif, onEdit, onDelete, onOpenUser }) {
   const f = FLAIRS[q.flair]; const Icon = f.icon; const author = userById(q.authorId);
   const isAuthor = q.authorId === me;
   const [editing, setEditing] = useState(false);
@@ -695,8 +712,10 @@ function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onR
 
         <div className="sheet-scroll">
           <div className="byline big">
-            <Avatar id={q.authorId} size={38} />
-            <div className="byline-txt"><span className="name">{author.name}</span><span className="meta">@{author.handle} · {ago(q.ts)}</span></div>
+            <button className="byline as-btn" onClick={() => onOpenUser && onOpenUser(q.authorId)}>
+              <Avatar id={q.authorId} size={38} />
+              <div className="byline-txt"><span className="name">{author.name}</span><span className="meta">@{author.handle} · {ago(q.ts)}</span></div>
+            </button>
             {!isAuthor && (
               <button className={"followmini wide" + (following.has(q.authorId) ? " on" : "")} onClick={() => onFollow(q.authorId)}>
                 {following.has(q.authorId) ? "Following" : "Follow"}
@@ -733,7 +752,9 @@ function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onR
                       {hasVoted && <span className="polpct">{pct}%</span>}
                     </button>
                     {hasVoted && !q.anon && o.voters.length > 0 && (
-                      <div className="voters">{o.voters.map((v) => <span key={v} className="vchip"><Avatar id={v} size={18} />{userById(v).name.split(" ")[0]}</span>)}</div>
+                      <div className="voters">{o.voters.map((v, i) => v
+                        ? <button key={v + i} className="vchip as-btn" onClick={() => onOpenUser && onOpenUser(v)}><Avatar id={v} size={18} />{userById(v).name.split(" ")[0]}</button>
+                        : <span key={"anon" + i} className="vchip"><span className="avatar" style={{ width: 18, height: 18, background: "#C9C9DC", fontSize: 9 }}>?</span>anon</span>)}</div>
                     )}
                   </div>
                 );
@@ -783,8 +804,8 @@ function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onR
               <div className="thread-h">{q.replies.length} {q.replies.length === 1 ? "reply" : "replies"}</div>
               {q.replies.map((r) => (
                 <div key={r.id} className="reply">
-                  <Avatar id={r.userId} size={28} />
-                  <div className="reply-body"><div className="reply-head"><span className="name">{userById(r.userId).name}</span><span className="meta">{ago(r.ts)}</span></div><p>{r.text}</p></div>
+                  <button className="as-btn" onClick={() => onOpenUser && onOpenUser(r.userId)} aria-label={`View ${userById(r.userId).name}'s profile`}><Avatar id={r.userId} size={28} /></button>
+                  <div className="reply-body"><div className="reply-head"><button className="name as-btn" onClick={() => onOpenUser && onOpenUser(r.userId)}>{userById(r.userId).name}</button><span className="meta">{ago(r.ts)}</span></div><p>{r.text}</p></div>
                 </div>
               ))}
               {q.replies.length === 0 && <p className="empty-inline">No replies yet — go first.</p>}
@@ -849,20 +870,20 @@ function Create({ onPost, me }) {
 }
 
 /* ---------- SAVED ---------- */
-function Saved({ list, onOpen, saved, onSave, following, onFollow, me }) {
+function Saved({ list, onOpen, saved, onSave, following, onFollow, onUser, me }) {
   return (
     <div className="padtop">
       <h1 className="screen-title">Saved</h1>
       <p className="screen-sub">The ones to bring to your next dinner.</p>
       {list.length === 0 ? <Empty title="Nothing saved yet" body="Tap the bookmark on any question to keep it here." />
         : <div className="cards">{list.map((q) => <Card key={q.id} q={q} me={me} saved={saved.has(q.id)} isFollowing={following.has(q.authorId)}
-            onOpen={() => onOpen(q.id)} onSave={() => onSave(q.id)} onFollow={() => onFollow(q.authorId)} />)}</div>}
+            onOpen={() => onOpen(q.id)} onSave={() => onSave(q.id)} onFollow={() => onFollow(q.authorId)} onUser={onUser} />)}</div>}
     </div>
   );
 }
 
 /* ---------- ALERTS ---------- */
-function Alerts({ activity, prefs, updatePrefs, onOpen }) {
+function Alerts({ activity, prefs, updatePrefs, onOpen, onUser }) {
   const setCat = (k) => {
     const c = new Set(prefs.cats); c.has(k) ? c.delete(k) : c.add(k);
     updatePrefs({ ...prefs, cats: c });
@@ -917,7 +938,7 @@ function Alerts({ activity, prefs, updatePrefs, onOpen }) {
       <div className="actfeed">
         <div className="prefsub">Recent activity</div>
         {activity.map((a) => (
-          <button key={a.id} className="actrow" onClick={() => a.qId && onOpen(a.qId)}>
+          <button key={a.id} className="actrow" onClick={() => a.qId ? onOpen(a.qId) : onUser && onUser(a.userId)}>
             <Avatar id={a.userId} size={32} /><span className="acttext">{line(a)}</span><span className="meta">{ago(a.ts)}</span>
           </button>
         ))}
@@ -927,20 +948,26 @@ function Alerts({ activity, prefs, updatePrefs, onOpen }) {
 }
 
 /* ---------- PROFILE ---------- */
-function Profile({ me, questions, following, followerCount = 0, onFollow, onOpen, replay }) {
+function Profile({ me, questions, following, followerCount = 0, onFollow, onOpen, onUser, replay }) {
   const mine = questions.filter((q) => q.authorId === me); const u = userById(me);
   return (
     <div className="padtop">
       <div className="profhead"><Avatar id={me} size={64} /><div><div className="profname">{u.name}</div><div className="meta">@{u.handle}</div></div></div>
       <div className="profstats">
-        <div><b>{mine.length}</b><span>asked</span></div><div><b>{followerCount}</b><span>followers</span></div><div><b>{following.size}</b><span>following</span></div>
+        <div><b>{mine.length}</b><span>asked</span></div>
+        <button className="as-stat" onClick={() => onUser && onUser(me, "followers")}><b>{followerCount}</b><span>followers</span></button>
+        <button className="as-stat" onClick={() => onUser && onUser(me, "following")}><b>{following.size}</b><span>following</span></button>
       </div>
       <div className="prefsub">People you follow</div>
       <div className="follist">
         {[...following].map((id) => (
-          <div key={id} className="folrow"><Avatar id={id} size={34} />
-            <div className="byline-txt"><span className="name">{userById(id).name}</span><span className="meta">@{userById(id).handle}</span></div>
-            <button className="followmini wide on" onClick={() => onFollow(id)}>Following</button></div>
+          <div key={id} className="folrow">
+            <button className="byline as-btn" onClick={() => onUser && onUser(id)}>
+              <Avatar id={id} size={34} />
+              <div className="byline-txt"><span className="name">{userById(id).name}</span><span className="meta">@{userById(id).handle}</span></div>
+            </button>
+            <button className="followmini wide on" onClick={() => onFollow(id)}>Following</button>
+          </div>
         ))}
         {following.size === 0 && <p className="empty-inline">You're not following anyone yet.</p>}
       </div>
@@ -952,6 +979,110 @@ function Profile({ me, questions, following, followerCount = 0, onFollow, onOpen
             <span className="meta">{totalVotes(q) + q.replies.length}</span></button>); })}</div>}
       <button className="btn-text full" onClick={replay}>View the intro again</button>
       <button className="signout-btn" onClick={() => supabase.auth.signOut()}>Sign out</button>
+    </div>
+  );
+}
+
+/* ---------- USER PROFILE SHEET ---------- */
+function UserProfile({ userId, me, questions, following, initialTab = "questions", onFollow, onOpenQuestion, onOpenUser, onClose }) {
+  const u = userById(userId);
+  const isMe = userId === me;
+  const [tabSel, setTabSel] = useState(initialTab);
+  const [followers, setFollowers] = useState(null);   // null = loading
+  const [followsList, setFollowsList] = useState(null);
+
+  useEffect(() => {
+    setTabSel(initialTab);
+    setFollowers(null); setFollowsList(null);
+    (async () => {
+      try {
+        const [fr, fg] = await Promise.all([
+          supabase.from("follows").select("follower_id").eq("followee_id", userId),
+          supabase.from("follows").select("followee_id").eq("follower_id", userId),
+        ]);
+        setFollowers((fr.data || []).map((r) => r.follower_id));
+        setFollowsList((fg.data || []).map((r) => r.followee_id));
+      } catch { setFollowers([]); setFollowsList([]); }
+    })();
+  }, [userId, initialTab]);
+
+  const asked = questions.filter((q) => q.authorId === userId).sort((a, b) => b.ts - a.ts);
+
+  const UserRow = ({ id }) => (
+    <div className="folrow">
+      <button className="byline as-btn" onClick={() => onOpenUser(id)}>
+        <Avatar id={id} size={34} />
+        <div className="byline-txt"><span className="name">{userById(id).name}</span><span className="meta">@{userById(id).handle}</span></div>
+      </button>
+      {id !== me && (
+        <button className={"followmini wide" + (following.has(id) ? " on" : "")} onClick={() => onFollow(id)}>
+          {following.has(id) ? "Following" : "Follow"}
+        </button>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="sheet-wrap" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-head">
+          <button className="iconbtn" onClick={onClose} aria-label="Back"><ChevronLeft size={20} /></button>
+          <span className="flairtag" style={{ color: C.purple }}><User size={13} /> Profile</span>
+          <span style={{ width: 34 }} />
+        </div>
+        <div className="sheet-scroll">
+          <div className="profhead">
+            <Avatar id={userId} size={64} />
+            <div style={{ flex: 1 }}>
+              <div className="profname">{u.name}{isMe ? <span className="youtag"> (you)</span> : ""}</div>
+              <div className="meta">@{u.handle}</div>
+            </div>
+            {!isMe && (
+              <button className={"followmini wide" + (following.has(userId) ? " on" : "")} onClick={() => onFollow(userId)}>
+                {following.has(userId) ? "Following" : "Follow"}
+              </button>
+            )}
+          </div>
+
+          <div className="profstats">
+            <button className={"as-stat" + (tabSel === "questions" ? " sel" : "")} onClick={() => setTabSel("questions")}>
+              <b>{asked.length}</b><span>asked</span>
+            </button>
+            <button className={"as-stat" + (tabSel === "followers" ? " sel" : "")} onClick={() => setTabSel("followers")}>
+              <b>{followers === null ? "…" : followers.length}</b><span>followers</span>
+            </button>
+            <button className={"as-stat" + (tabSel === "following" ? " sel" : "")} onClick={() => setTabSel("following")}>
+              <b>{followsList === null ? "…" : followsList.length}</b><span>following</span>
+            </button>
+          </div>
+
+          {tabSel === "questions" && (
+            asked.length === 0 ? <p className="empty-inline">{isMe ? "You haven't" : `${u.name.split(" ")[0]} hasn't`} asked anything yet.</p> :
+            <div className="cards" style={{ padding: "8px 0 20px" }}>
+              {asked.map((q) => { const f = FLAIRS[q.flair]; const Icon = f.icon;
+                return (
+                  <button key={q.id} className="minirow" onClick={() => onOpenQuestion(q.id)}>
+                    <Icon size={15} style={{ color: f.tint, flexShrink: 0 }} />
+                    <span className="minititle">{q.title}</span>
+                    <span className="meta">{totalVotes(q) + q.replies.length}</span>
+                  </button>
+                ); })}
+            </div>
+          )}
+
+          {tabSel === "followers" && (
+            followers === null ? <p className="empty-inline">Loading…</p> :
+            followers.length === 0 ? <p className="empty-inline">No followers yet.</p> :
+            <div className="follist" style={{ paddingBottom: 20 }}>{followers.map((id) => <UserRow key={id} id={id} />)}</div>
+          )}
+
+          {tabSel === "following" && (
+            followsList === null ? <p className="empty-inline">Loading…</p> :
+            followsList.length === 0 ? <p className="empty-inline">{isMe ? "You're" : "They're"} not following anyone yet.</p> :
+            <div className="follist" style={{ paddingBottom: 20 }}>{followsList.map((id) => <UserRow key={id} id={id} />)}</div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1225,6 +1356,17 @@ html, body{height:100%; margin:0; overflow:hidden; overscroll-behavior:none;}
 .edit-save{background:var(--purple); color:#fff; border:none; border-radius:999px; padding:8px 18px; font-weight:700; font-size:13px; cursor:pointer; font-family:var(--body);}
 .edit-save:disabled{opacity:.45; cursor:default;}
 .signout-btn{width:100%; background:none; border:1.5px solid var(--line); color:#C2185B; font-weight:700; font-size:14px; padding:12px; border-radius:13px; cursor:pointer; font-family:var(--body); margin-top:10px;}
+
+.as-btn{background:none; border:none; padding:0; cursor:pointer; text-align:left; color:inherit; font-family:inherit;}
+button.byline.as-btn{display:flex; gap:9px; align-items:center; flex:1; min-width:0;}
+button.name.as-btn{font-weight:700; font-size:14px;}
+button.name.as-btn:hover{color:var(--purple);}
+.as-stat{flex:1; background:var(--white); border:1px solid var(--line); border-radius:14px; padding:13px; text-align:center; cursor:pointer; font-family:var(--body); color:var(--ink);}
+.as-stat b{display:block; font-family:var(--disp); font-weight:600; font-size:21px;}
+.as-stat span{font-size:12px; color:var(--muted);}
+.as-stat.sel{border-color:var(--purple); background:#6c4dff0d;}
+.as-stat.sel span{color:var(--purple);}
+.youtag{font-size:13px; color:var(--muted); font-weight:500;}
 
 .boot{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:40px; text-align:center; color:var(--muted); font-family:var(--disp); font-weight:600;}
 .booterr{color:#C2185B; background:#FFE9F2; border-radius:12px; padding:12px 16px; font-family:var(--body); font-weight:500; font-size:14px; max-width:300px;}
