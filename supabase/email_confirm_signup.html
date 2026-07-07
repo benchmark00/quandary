@@ -1,0 +1,42 @@
+<!-- ==========================================================================
+  Quandary — branded "Confirm signup" email
+  Where to paste this:
+    Supabase → Authentication → Emails (or "Email Templates") → Confirm signup
+    • Subject line:  You're one tap from Quandary 📬
+    • Message body:  paste everything below (switch to the HTML/source view)
+  The {{ .ConfirmationURL }} tag is required — Supabase swaps in the real link.
+=========================================================================== -->
+<div style="margin:0;padding:0;background-color:#F2F3FF;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#F2F3FF;padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#FFFFFF;border-radius:20px;border:1px solid #E7E7F3;padding:36px 32px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+          <tr>
+            <td align="center">
+              <img src="https://quandary.live/wordmark.png" alt="Quandary" width="200" style="display:block;margin:0 auto 8px;" />
+              <p style="color:#6E6E86;font-size:14px;margin:0 0 28px;">Every hypothetical deserves an answer.</p>
+
+              <h1 style="color:#0D0F1A;font-size:24px;font-weight:800;margin:0 0 12px;">One tap and you're in 🎉</h1>
+              <p style="color:#6E6E86;font-size:15px;line-height:1.6;margin:0 0 28px;">
+                Confirm your email and start weighing in on the internet's most
+                impossible questions. The ice-skate-vs-Delilah debate isn't going
+                to settle itself.
+              </p>
+
+              <a href="{{ .ConfirmationURL }}"
+                 style="display:inline-block;background:#6C4DFF;color:#FFFFFF;text-decoration:none;font-weight:700;font-size:16px;padding:14px 36px;border-radius:14px;">
+                Confirm my email
+              </a>
+
+              <p style="color:#A3A3B8;font-size:12.5px;line-height:1.6;margin:28px 0 0;">
+                Didn't sign up for Quandary? You can safely ignore this email —
+                no account will be created.
+              </p>
+            </td>
+          </tr>
+        </table>
+        <p style="color:#A3A3B8;font-size:12px;margin:18px 0 0;">© Quandary · quandary.live</p>
+      </td>
+    </tr>
+  </table>
+</div>

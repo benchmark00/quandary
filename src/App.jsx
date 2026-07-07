@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   Home, PlusCircle, Bookmark, Bell, User, Scale, Flame, Sparkles,
   MessageCircle, Star, Flag, Search, ChevronLeft, Check, HelpCircle,
@@ -149,6 +149,7 @@ function Wordmark({ size = 28 }) {
 
 /* ---------- small pieces ---------- */
 function Avatar({ id, size = 30 }) {
+  if (!id) return <div className="avatar" style={{ width: size, height: size, background: "#C9C9DC", fontSize: size * 0.42 }}>?</div>;
   const u = userById(id);
   return <div className="avatar" style={{ width: size, height: size, background: u.color, fontSize: size * 0.42 }}>
     {u.name === "You" ? "Y" : u.name[0]}</div>;
@@ -196,6 +197,7 @@ export default function Quandary() {
   const [viewUser, setViewUser] = useState(null);       // whose profile sheet is open
   const [viewUserTab, setViewUserTab] = useState("questions");
   const [followerCount, setFollowerCount] = useState(0);
+  const deepLinked = useRef(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -211,7 +213,7 @@ export default function Quandary() {
 
       const [{ data: profiles }, { data: baseQs }] = await Promise.all([
         supabase.from("profiles").select("id, name, handle, color, onboarded"),
-        supabase.from("questions").select("id, author_id, flair, format, title, body, anonymous, created_at").eq("hidden", false),
+        supabase.from("questions").select("id, author_id, flair, format, title, body, anonymous, anonymous_replies, created_at").eq("hidden", false),
       ]);
       (profiles || []).forEach((p) => { PROFILES[p.id] = p; });
       const myProfile = (profiles || []).find((p) => p.id === user.id);
@@ -224,7 +226,7 @@ export default function Quandary() {
         supabase.from("question_options").select("id, question_id, label, position").in("question_id", inIds),
         supabase.from("vote_details").select("question_id, option_id, voter_id").in("question_id", inIds),
         supabase.from("votes").select("question_id, option_id").eq("voter_id", user.id),
-        supabase.from("replies").select("id, question_id, author_id, body, created_at").in("question_id", inIds),
+        supabase.from("reply_details").select("id, question_id, author_id, body, created_at").in("question_id", inIds),
         supabase.from("clarifications").select("id, question_id, asker_id, body, answer_body, answered_at, created_at").in("question_id", inIds),
         supabase.from("ratings").select("question_id, rater_id, stars").in("question_id", inIds),
         supabase.from("follows").select("followee_id").eq("follower_id", user.id),
@@ -263,11 +265,19 @@ export default function Quandary() {
           .map((c) => ({ id: c.id, userId: c.asker_id, text: c.body, ts: Date.parse(c.created_at),
             answer: c.answer_body ? { text: c.answer_body, ts: Date.parse(c.answered_at || c.created_at) } : null }));
         const rts = {}; (ratG[q.id] || []).forEach((r) => { rts[r.rater_id] = r.stars; });
-        return { id: q.id, authorId: q.author_id, flair: q.flair, format: q.format, anon: q.anonymous,
+        return { id: q.id, authorId: q.author_id, flair: q.flair, format: q.format, anon: q.anonymous, anonReplies: q.anonymous_replies,
           title: q.title, body: q.body || "", options, replies: reps, clarifs: clars, ratings: rts, reported: false, ts: Date.parse(q.created_at) };
       });
 
       setQuestions(shaped);
+      if (!deepLinked.current) {
+        deepLinked.current = true;
+        const m = window.location.pathname.match(/^\/q\/([0-9a-fA-F-]{20,})/);
+        if (m) {
+          if (shaped.some((q) => q.id === m[1])) setOpen(m[1]);
+          window.history.replaceState({}, "", "/");
+        }
+      }
       setFollowing(new Set((myFollows.data || []).map((f) => f.followee_id)));
       setSaved(new Set((mySaves.data || []).map((s) => s.question_id)));
       setFollowerCount((myFollowers.data || []).length);
@@ -386,7 +396,7 @@ export default function Quandary() {
   const createQuestion = async (q) => {
     try {
       const { data: inserted, error } = await supabase.from("questions")
-        .insert({ author_id: me, flair: q.flair, format: q.format, title: q.title, body: q.body, anonymous: q.anon })
+        .insert({ author_id: me, flair: q.flair, format: q.format, title: q.title, body: q.body, anonymous: q.anon, anonymous_replies: q.anonReplies || false })
         .select().single();
       if (error) throw error;
       if (q.options && q.options.length) {
@@ -629,7 +639,7 @@ function Qotd({ q, onOpen }) {
       <div className="qotd-ribbon"><Crown size={13} /> Question of the day</div>
       <h2 className="qotd-title">{q.title}</h2>
       <div className="qotd-foot">
-        <span><Scale size={15} /> {votes} votes</span>
+        <span><Scale size={15} /> {votes} {votes === 1 ? "vote" : "votes"}</span>
         <span><MessageCircle size={15} /> {q.replies.length}</span>
         <span><HelpCircle size={15} /> {q.clarifs.length}</span>
         <span className="qotd-go">Weigh in <ArrowRight size={15} /></span>
@@ -801,11 +811,17 @@ function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onR
 
           {isThread && (
             <div className="thread">
-              <div className="thread-h">{q.replies.length} {q.replies.length === 1 ? "reply" : "replies"}</div>
+              <div className="thread-h">{q.replies.length} {q.replies.length === 1 ? "reply" : "replies"}{q.anonReplies ? " · replies are anonymous" : ""}</div>
               {q.replies.map((r) => (
                 <div key={r.id} className="reply">
-                  <button className="as-btn" onClick={() => onOpenUser && onOpenUser(r.userId)} aria-label={`View ${userById(r.userId).name}'s profile`}><Avatar id={r.userId} size={28} /></button>
-                  <div className="reply-body"><div className="reply-head"><button className="name as-btn" onClick={() => onOpenUser && onOpenUser(r.userId)}>{userById(r.userId).name}</button><span className="meta">{ago(r.ts)}</span></div><p>{r.text}</p></div>
+                  {r.userId
+                    ? <button className="as-btn" onClick={() => onOpenUser && onOpenUser(r.userId)} aria-label={`View ${userById(r.userId).name}'s profile`}><Avatar id={r.userId} size={28} /></button>
+                    : <Avatar id={null} size={28} />}
+                  <div className="reply-body"><div className="reply-head">
+                    {r.userId
+                      ? <button className="name as-btn" onClick={() => onOpenUser && onOpenUser(r.userId)}>{userById(r.userId).name}</button>
+                      : <span className="name">Anonymous</span>}
+                    <span className="meta">{ago(r.ts)}</span></div><p>{r.text}</p></div>
                 </div>
               ))}
               {q.replies.length === 0 && <p className="empty-inline">No replies yet — go first.</p>}
@@ -829,12 +845,14 @@ function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onR
 function Create({ onPost, me }) {
   const [title, setTitle] = useState(""); const [body, setBody] = useState("");
   const [flair, setFlair] = useState("wyr"); const [format, setFormat] = useState("pollfree");
-  const [anon, setAnon] = useState(false); const [opts, setOpts] = useState(["", ""]);
+  const [anon, setAnon] = useState(false); const [anonReplies, setAnonReplies] = useState(false);
+  const [opts, setOpts] = useState(["", ""]);
   const needsPoll = format === "poll" || format === "pollfree";
+  const hasThread = format === "free" || format === "pollfree";
   const validOpts = opts.map((o) => o.trim()).filter(Boolean);
   const canPost = title.trim().length > 4 && (!needsPoll || validOpts.length >= 2);
   const post = () => onPost({
-    id: nid(), authorId: me, flair, format, anon, title: title.trim(), body: body.trim(),
+    id: nid(), authorId: me, flair, format, anon, anonReplies: hasThread && anonReplies, title: title.trim(), body: body.trim(),
     options: needsPoll ? validOpts.map((t) => ({ id: nid(), text: t, voters: [] })) : [],
     replies: [], clarifs: [], ratings: {}, reported: false, ts: Date.now(),
   });
@@ -863,6 +881,12 @@ function Create({ onPost, me }) {
           <label className="toggle"><input type="checkbox" checked={anon} onChange={(e) => setAnon(e.target.checked)} />
             <span>Hide who voted for what <em>— good for spicy or honest questions</em></span></label>
         </div>
+      )}
+      {hasThread && (
+        <label className="toggle" style={{ marginTop: needsPoll ? 0 : 4, marginBottom: 16 }}>
+          <input type="checkbox" checked={anonReplies} onChange={(e) => setAnonReplies(e.target.checked)} />
+          <span>Make replies anonymous too <em>— names hidden on the whole thread</em></span>
+        </label>
       )}
       <button className="postbtn" disabled={!canPost} onClick={post}>Ask Quandary</button>
     </div>

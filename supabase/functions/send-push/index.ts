@@ -28,7 +28,7 @@ const name = async (id: string) => {
 
 const question = async (id: string) => {
   const { data } = await admin.from("questions")
-    .select("id, title, flair, author_id").eq("id", id).single();
+    .select("id, title, flair, author_id, anonymous_replies").eq("id", id).single();
   return data;
 };
 
@@ -61,8 +61,8 @@ async function sendToUsers(userIds: string[], payload: string) {
   return ok;
 }
 
-const payload = (title: string, body: string) =>
-  JSON.stringify({ title, body, url: "/" });
+const payload = (title: string, body: string, url = "/") =>
+  JSON.stringify({ title, body, url });
 
 Deno.serve(async (req) => {
   try {
@@ -100,14 +100,14 @@ Deno.serve(async (req) => {
         .map((p) => p.user_id);
       console.log("question recipients:", recipients.length);
       sent = await sendToUsers(recipients,
-        payload(`${author} asked a ${FLAIR_LABEL[rec.flair] ?? "question"}`, rec.title));
+        payload(`${author} asked a ${FLAIR_LABEL[rec.flair] ?? "question"}`, rec.title, `/q/${rec.id}`));
 
     } else if (type === "reply") {
       const q = await question(rec.question_id);
       if (q && q.author_id !== rec.author_id) {
-        const actor = await name(rec.author_id);
+        const actor = q.anonymous_replies ? "Someone" : await name(rec.author_id);
         sent = await sendToUsers([q.author_id],
-          payload(`${actor} replied to your question`, `"${q.title}" — ${rec.body}`.slice(0, 160)));
+          payload(`${actor} replied to your question`, `"${q.title}" — ${rec.body}`.slice(0, 160), `/q/${q.id}`));
       } else console.log("reply by the author themselves — skipping");
 
     } else if (type === "clarif") {
@@ -115,7 +115,7 @@ Deno.serve(async (req) => {
       if (q && q.author_id !== rec.asker_id) {
         const actor = await name(rec.asker_id);
         sent = await sendToUsers([q.author_id],
-          payload(`${actor} asked for more context`, `On "${q.title}": ${rec.body}`.slice(0, 160)));
+          payload(`${actor} asked for more context`, `On "${q.title}": ${rec.body}`.slice(0, 160), `/q/${q.id}`));
       }
 
     } else if (type === "clarif_answer") {
@@ -123,7 +123,7 @@ Deno.serve(async (req) => {
       if (q && rec.asker_id !== q.author_id) {
         const actor = await name(q.author_id);
         sent = await sendToUsers([rec.asker_id],
-          payload(`${actor} answered your clarifying question`, `${rec.answer_body}`.slice(0, 160)));
+          payload(`${actor} answered your clarifying question`, `${rec.answer_body}`.slice(0, 160), `/q/${q.id}`));
       }
     }
 

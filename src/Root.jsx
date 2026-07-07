@@ -36,6 +36,7 @@ function Auth() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
+  const [awaiting, setAwaiting] = useState(null); // email address pending confirmation
 
   // usernames: lowercase letters, numbers, underscores
   const cleanUsername = (v) => v.replace(/[^a-z0-9_]/gi, "").toLowerCase().slice(0, 20);
@@ -46,12 +47,12 @@ function Auth() {
       if (mode === "signup") {
         const handle = cleanUsername(username);
         if (handle.length < 3) throw new Error("Pick a username of at least 3 characters (letters, numbers, underscores).");
-        const { error } = await supabase.auth.signUp({
+        const { data, error } = await supabase.auth.signUp({
           email, password,
           options: { data: { name: name.trim() || handle, handle } },
         });
         if (error) throw error;
-        setNote("Account created! If nothing happens, check your email to confirm, then log in.");
+        if (!data.session) { setAwaiting(email); return; }
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
@@ -62,6 +63,25 @@ function Auth() {
       setBusy(false);
     }
   };
+
+  if (awaiting) {
+    return (
+      <div className="auth-wrap">
+        <AuthStyle />
+        <div className="auth-card">
+          <div className="auth-mail">📬</div>
+          <h1 className="auth-title">One tap to go!</h1>
+          <p className="auth-sub">We've sent a confirmation link to</p>
+          <p className="auth-email">{awaiting}</p>
+          <p className="auth-copy">Tap the link in that email and the hypotheticals await. Every hypothetical deserves an answer — including "did my email arrive?" (Check spam if it's hiding.)</p>
+          <button className="auth-btn" onClick={() => { setAwaiting(null); setMode("login"); setError(""); setNote(""); }}>
+            I've confirmed — log me in
+          </button>
+          <button className="auth-switch" onClick={() => { setAwaiting(null); setMode("signup"); }}>Used the wrong email? Start over</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="auth-wrap">
@@ -110,6 +130,9 @@ function AuthStyle() {
 .auth-card{width:100%; max-width:380px; background:#fff; border:1px solid #E7E7F3; border-radius:24px; padding:32px 26px;
   box-shadow:0 24px 70px rgba(76,61,232,.16); text-align:center;}
 .auth-logo{margin-bottom:14px;}
+.auth-mail{font-size:52px; margin-bottom:10px;}
+.auth-email{font-weight:800; color:#6C4DFF; font-size:16px; margin:2px 0 14px; word-break:break-all;}
+.auth-copy{color:#6E6E86; font-size:14px; line-height:1.55; margin:0 0 20px;}
 .auth-title{font-family:'Fredoka',system-ui,sans-serif; font-weight:700; font-size:26px; color:#0D0F1A; margin:0 0 2px;}
 .auth-sub{color:#6E6E86; font-size:14px; margin:0 0 22px;}
 .auth-in{width:100%; box-sizing:border-box; background:#F2F3FF; border:1.5px solid #E7E7F3; border-radius:12px;
