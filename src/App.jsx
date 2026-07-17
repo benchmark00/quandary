@@ -3,7 +3,7 @@ import {
   Home, PlusCircle, Bookmark, Bell, User, Scale, Flame, Sparkles,
   MessageCircle, Star, Flag, Search, ChevronLeft, Check, HelpCircle,
   UserPlus, UserCheck, Send, X, Split, Droplet, Tent, ThumbsDown, Plus, Trash2,
-  Share, ArrowRight, Crown, Pencil,
+  Share, ArrowRight, Crown, Pencil, Eye, EyeOff,
 } from "lucide-react";
 import { supabase } from "./lib/supabase.js";
 import { enablePush, pushSupported, isStandalone } from "./lib/push.js";
@@ -194,6 +194,7 @@ export default function Quandary() {
   const [prefs, setPrefs] = useState({ every: false, followed: true, cats: new Set() });
   const [me, setMe] = useState(null);
   const [qotdId, setQotdId] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [viewUser, setViewUser] = useState(null);       // whose profile sheet is open
   const [viewUserTab, setViewUserTab] = useState("questions");
   const [followerCount, setFollowerCount] = useState(0);
@@ -212,12 +213,14 @@ export default function Quandary() {
       setMe(user.id);
 
       const [{ data: profiles }, { data: baseQs }] = await Promise.all([
-        supabase.from("profiles").select("id, name, handle, color, onboarded"),
-        supabase.from("questions").select("id, author_id, flair, format, title, body, anonymous, anonymous_replies, created_at").eq("hidden", false),
+        supabase.from("profiles").select("id, name, handle, color, onboarded, is_admin"),
+        supabase.from("questions").select("id, author_id, flair, format, title, body, anonymous, anonymous_replies, hidden, created_at"),
       ]);
       (profiles || []).forEach((p) => { PROFILES[p.id] = p; });
       const myProfile = (profiles || []).find((p) => p.id === user.id);
       setOnboarded(myProfile ? myProfile.onboarded === true : true);
+      const amAdmin = myProfile ? myProfile.is_admin === true : false;
+      setIsAdmin(amAdmin);
 
       const ids = (baseQs || []).map((q) => q.id);
       const inIds = ids.length ? ids : ["00000000-0000-0000-0000-000000000000"];
@@ -265,11 +268,11 @@ export default function Quandary() {
           .map((c) => ({ id: c.id, userId: c.asker_id, text: c.body, ts: Date.parse(c.created_at),
             answer: c.answer_body ? { text: c.answer_body, ts: Date.parse(c.answered_at || c.created_at) } : null }));
         const rts = {}; (ratG[q.id] || []).forEach((r) => { rts[r.rater_id] = r.stars; });
-        return { id: q.id, authorId: q.author_id, flair: q.flair, format: q.format, anon: q.anonymous, anonReplies: q.anonymous_replies,
+        return { id: q.id, authorId: q.author_id, flair: q.flair, format: q.format, anon: q.anonymous, anonReplies: q.anonymous_replies, hidden: q.hidden,
           title: q.title, body: q.body || "", options, replies: reps, clarifs: clars, ratings: rts, reported: false, ts: Date.parse(q.created_at) };
       });
 
-      setQuestions(shaped);
+      setQuestions(amAdmin ? shaped : shaped.filter((q) => !q.hidden));
       if (!deepLinked.current) {
         deepLinked.current = true;
         const m = window.location.pathname.match(/^\/q\/([0-9a-fA-F-]{20,})/);
@@ -386,6 +389,20 @@ export default function Quandary() {
       await loadAll(); flash("Question updated");
     } catch (e) { flash(e.message); }
   };
+  const toggleHidden = async (qId, hide) => {
+    try {
+      const { error } = await supabase.from("questions").update({ hidden: hide }).eq("id", qId);
+      if (error) throw error;
+      await loadAll(); flash(hide ? "Question hidden from the feed" : "Question restored");
+    } catch (e) { flash(e.message); }
+  };
+  const deleteReply = async (rId) => {
+    try {
+      const { error } = await supabase.from("replies").delete().eq("id", rId);
+      if (error) throw error;
+      await loadAll(); flash("Reply deleted");
+    } catch (e) { flash(e.message); }
+  };
   const deleteQuestion = async (qId) => {
     try {
       const { error } = await supabase.from("questions").delete().eq("id", qId);
@@ -464,7 +481,8 @@ export default function Quandary() {
           <Detail q={openQ} me={me} following={following} saved={saved} onClose={() => setOpen(null)}
             onVote={vote} onRate={rate} onReply={reply} onReport={report} onSave={toggleSave} onFollow={toggleFollow}
             onAskClarif={askClarif} onAnswerClarif={answerClarif}
-            onEdit={editQuestion} onDelete={deleteQuestion} onOpenUser={openUser} />
+            onEdit={editQuestion} onDelete={deleteQuestion} onOpenUser={openUser}
+            isAdmin={isAdmin} onToggleHidden={toggleHidden} onDeleteReply={deleteReply} />
         )}
         {searchOpen && <SearchOverlay questions={questions} onClose={() => setSearchOpen(false)} onOpen={(id) => { setSearchOpen(false); setOpen(id); }} />}
         {viewUser && (
@@ -664,7 +682,7 @@ function Card({ q, me, saved, isFollowing, onOpen, onSave, onFollow, onUser }) {
           </button>
         )}
       </div>
-      <div className="flairtag" style={{ color: f.tint }}><Icon size={13} /> {f.label}{q.anon ? " · anon" : ""}</div>
+      <div className="flairtag" style={{ color: f.tint }}><Icon size={13} /> {f.label}{q.anon ? " · anon" : ""}{q.hidden ? " · hidden" : ""}</div>
       <h3 className="card-title">{q.title}</h3>
       {q.body ? <p className="card-body">{q.body}</p> : null}
       <div className="card-foot">
@@ -680,13 +698,14 @@ function Card({ q, me, saved, isFollowing, onOpen, onSave, onFollow, onUser }) {
 }
 
 /* ---------- DETAIL ---------- */
-function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onReport, onSave, onFollow, onAskClarif, onAnswerClarif, onEdit, onDelete, onOpenUser }) {
+function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onReport, onSave, onFollow, onAskClarif, onAnswerClarif, onEdit, onDelete, onOpenUser, isAdmin, onToggleHidden, onDeleteReply }) {
   const f = FLAIRS[q.flair]; const Icon = f.icon; const author = userById(q.authorId);
   const isAuthor = q.authorId === me;
   const [editing, setEditing] = useState(false);
   const [tDraft, setTDraft] = useState(q.title);
   const [bDraft, setBDraft] = useState(q.body);
   const [confirmDel, setConfirmDel] = useState(false);
+  const [confirmDelReply, setConfirmDelReply] = useState(null);
   const myVote = (q.options || []).find((o) => o.voters.includes(me));
   const hasVoted = !!myVote; const votes = totalVotes(q); const myRating = q.ratings[me];
   const [draft, setDraft] = useState("");
@@ -702,8 +721,14 @@ function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onR
         <div className="sheet-head">
           <button className="iconbtn" onClick={onClose} aria-label="Back"><ChevronLeft size={20} /></button>
           <span className="flairtag" style={{ color: f.tint }}><Icon size={13} /> {f.label}</span>
-          {isAuthor ? (
+          {(isAuthor || isAdmin) ? (
             <span style={{ display: "inline-flex", gap: 2 }}>
+              {isAdmin && (
+                <button className="iconbtn" onClick={() => onToggleHidden(q.id, !q.hidden)}
+                  aria-label={q.hidden ? "Restore" : "Hide"} title={q.hidden ? "Restore to feed" : "Hide from feed"}>
+                  {q.hidden ? <Eye size={17} /> : <EyeOff size={17} />}
+                </button>
+              )}
               <button className="iconbtn" onClick={() => { setTDraft(q.title); setBDraft(q.body); setEditing(true); }} aria-label="Edit" title="Edit"><Pencil size={17} /></button>
               <button className="iconbtn" onClick={() => setConfirmDel(true)} aria-label="Delete" title="Delete"><Trash2 size={17} /></button>
             </span>
@@ -711,6 +736,10 @@ function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onR
             <button className="iconbtn" onClick={() => onReport(q.id)} aria-label="Report" title="Report"><Flag size={17} /></button>
           )}
         </div>
+
+        {q.hidden && (
+          <div className="hiddenbar"><EyeOff size={14} /> Hidden from the feed — visible to admins only. Use the eye button to restore it.</div>
+        )}
 
         {confirmDel && (
           <div className="confirmbar">
@@ -821,7 +850,15 @@ function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onR
                     {r.userId
                       ? <button className="name as-btn" onClick={() => onOpenUser && onOpenUser(r.userId)}>{userById(r.userId).name}</button>
                       : <span className="name">Anonymous</span>}
-                    <span className="meta">{ago(r.ts)}</span></div><p>{r.text}</p></div>
+                    <span className="meta">{ago(r.ts)}</span>
+                    {isAdmin && (
+                      <button className={"replydel" + (confirmDelReply === r.id ? " arm" : "")}
+                        onClick={() => confirmDelReply === r.id ? (onDeleteReply(r.id), setConfirmDelReply(null)) : setConfirmDelReply(r.id)}
+                        title={confirmDelReply === r.id ? "Tap again to delete" : "Delete reply"}>
+                        <Trash2 size={13} />{confirmDelReply === r.id ? " sure?" : ""}
+                      </button>
+                    )}
+                  </div><p>{r.text}</p></div>
                 </div>
               ))}
               {q.replies.length === 0 && <p className="empty-inline">No replies yet — go first.</p>}
@@ -1391,6 +1428,11 @@ button.name.as-btn:hover{color:var(--purple);}
 .as-stat.sel{border-color:var(--purple); background:#6c4dff0d;}
 .as-stat.sel span{color:var(--purple);}
 .youtag{font-size:13px; color:var(--muted); font-weight:500;}
+
+.hiddenbar{display:flex; align-items:center; gap:8px; background:#FFF6E6; color:#9A6B00; padding:10px 16px; font-size:12.5px; font-weight:600;}
+.replydel{display:inline-flex; align-items:center; gap:3px; margin-left:auto; background:none; border:none; color:#C9C9DC; cursor:pointer; font-size:11px; font-weight:700; padding:2px 4px; border-radius:6px;}
+.replydel:hover{color:#C2185B;}
+.replydel.arm{color:#fff; background:#C2185B;}
 
 .boot{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:40px; text-align:center; color:var(--muted); font-family:var(--disp); font-weight:600;}
 .booterr{color:#C2185B; background:#FFE9F2; border-radius:12px; padding:12px 16px; font-family:var(--body); font-weight:500; font-size:14px; max-width:300px;}
