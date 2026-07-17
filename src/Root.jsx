@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { X } from "lucide-react";
 import { supabase } from "./lib/supabase.js";
 import Quandary from "./App.jsx";
 
@@ -22,12 +23,12 @@ export default function Root() {
   }, []);
 
   if (checking) return <Centered>Loading…</Centered>;
-  if (!session) return <Auth />;
+  if (!session) return <Landing />;
 
   return <Quandary />;
 }
 
-function Auth() {
+function Auth({ onDismiss }) {
   const [mode, setMode] = useState("signup"); // 'signup' | 'login'
   const [name, setName] = useState("");
   const [username, setUsername] = useState("");
@@ -69,6 +70,7 @@ function Auth() {
       <div className="auth-wrap">
         <AuthStyle />
         <div className="auth-card">
+          {onDismiss && <button className="auth-x" onClick={onDismiss} aria-label="Close"><X size={20} /></button>}
           <div className="auth-mail">📬</div>
           <h1 className="auth-title">One tap to go!</h1>
           <p className="auth-sub">We've sent a confirmation link to</p>
@@ -87,6 +89,7 @@ function Auth() {
     <div className="auth-wrap">
       <AuthStyle />
       <div className="auth-card">
+        {onDismiss && <button className="auth-x" onClick={onDismiss} aria-label="Close"><X size={20} /></button>}
         <div className="auth-logo">
           <img src="/logo.png" alt="Quandary" width="62" height="62" style={{ objectFit: "contain" }} draggable={false} />
         </div>
@@ -117,6 +120,95 @@ function Auth() {
   );
 }
 
+/* ---------------------------------------------------------------------------
+ *  Landing — what signed-out visitors see.
+ *  The signup card opens on arrival; X-ing out reveals a read-only preview of
+ *  the live feed with a Sign Up CTA pinned in the header. Any tap on the
+ *  preview reopens the signup card.
+ * ------------------------------------------------------------------------- */
+const LAND_FLAIRS = {
+  wyr: ["Would You Rather", "#6C4DFF"], tot: ["This or That", "#21D4C3"],
+  hot: ["Hot Take", "#FF4DB8"], hypo: ["Hypothetical", "#FF9F1C"],
+  moral: ["Moral Dilemma", "#E0A800"], unpop: ["Unpopular Opinion", "#FF4DB8"],
+  free: ["Free Form", "#6C4DFF"], island: ["Desert Island", "#FF9F1C"],
+  shower: ["Shower Thought", "#21D4C3"],
+};
+
+function Landing() {
+  const [showAuth, setShowAuth] = useState(true);
+  const [items, setItems] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [qs, ps, vs, rs] = await Promise.all([
+          supabase.from("questions").select("id, author_id, flair, title, body, created_at").eq("hidden", false).order("created_at", { ascending: false }).limit(20),
+          supabase.from("profiles").select("id, name, handle, color"),
+          supabase.from("vote_details").select("question_id"),
+          supabase.from("reply_details").select("question_id"),
+        ]);
+        const pmap = {}; (ps.data || []).forEach((p) => { pmap[p.id] = p; });
+        const vc = {}; (vs.data || []).forEach((v) => { vc[v.question_id] = (vc[v.question_id] || 0) + 1; });
+        const rc = {}; (rs.data || []).forEach((r) => { rc[r.question_id] = (rc[r.question_id] || 0) + 1; });
+        setItems((qs.data || []).map((q) => ({
+          ...q, author: pmap[q.author_id],
+          votes: vc[q.id] || 0, replies: rc[q.id] || 0,
+        })));
+      } catch { setItems([]); }
+    })();
+  }, []);
+
+  const ago = (ts) => {
+    const sPast = Math.floor((Date.now() - Date.parse(ts)) / 1000);
+    if (sPast < 60) return "just now";
+    const m = Math.floor(sPast / 60); if (m < 60) return `${m}m`;
+    const h = Math.floor(m / 60); if (h < 24) return `${h}h`;
+    return `${Math.floor(h / 24)}d`;
+  };
+
+  return (
+    <div className="land-wrap">
+      <AuthStyle />
+      <header className="land-head">
+        <img src="/wordmark.png" alt="Quandary" className="land-logo" draggable={false} />
+        {!showAuth && <button className="land-cta" onClick={() => setShowAuth(true)}>Sign Up</button>}
+      </header>
+      <p className="land-tag">Every hypothetical deserves an answer.</p>
+
+      <div className="land-feed" onClick={() => setShowAuth(true)} role="button" aria-label="Sign up to interact">
+        {items === null && <p className="land-note">Loading the latest quandaries…</p>}
+        {items && items.length === 0 && <p className="land-note">The feed is warming up…</p>}
+        {items && items.map((q) => {
+          const [label, tint] = LAND_FLAIRS[q.flair] || ["Question", "#6C4DFF"];
+          const a = q.author;
+          return (
+            <article key={q.id} className="land-card">
+              <div className="land-byline">
+                <span className="land-avatar" style={{ background: a ? a.color : "#C9C9DC" }}>{a ? a.name[0] : "?"}</span>
+                <span className="land-name">{a ? a.name : "Someone"}</span>
+                <span className="land-meta">· {ago(q.created_at)}</span>
+              </div>
+              <div className="land-flair" style={{ color: tint }}>{label}</div>
+              <h3 className="land-title">{q.title}</h3>
+              {q.body ? <p className="land-body">{q.body}</p> : null}
+              <div className="land-foot">
+                {q.votes} {q.votes === 1 ? "vote" : "votes"} · {q.replies} {q.replies === 1 ? "reply" : "replies"}
+                <span className="land-lock">Sign up to weigh in</span>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+
+      {showAuth && (
+        <div className="land-ov">
+          <Auth onDismiss={() => setShowAuth(false)} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Centered({ children }) {
   return <div className="auth-wrap"><AuthStyle /><div style={{ color: "#6E6E86", fontFamily: "system-ui" }}>{children}</div></div>;
 }
@@ -127,8 +219,28 @@ function AuthStyle() {
 @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
 .auth-wrap{min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px;
   background:linear-gradient(180deg,#EDEBFF 0%,#F7F5FF 60%,#FFFFFF 100%); font-family:'Plus Jakarta Sans',system-ui,sans-serif;}
-.auth-card{width:100%; max-width:380px; background:#fff; border:1px solid #E7E7F3; border-radius:24px; padding:32px 26px;
+.auth-card{position:relative; width:100%; max-width:380px; background:#fff; border:1px solid #E7E7F3; border-radius:24px; padding:32px 26px;
   box-shadow:0 24px 70px rgba(76,61,232,.16); text-align:center;}
+.auth-x{position:absolute; top:12px; right:12px; background:#F2F3FF; border:none; border-radius:50%; width:34px; height:34px; display:grid; place-items:center; color:#6E6E86; cursor:pointer;}
+.auth-x:hover{color:#0D0F1A;}
+.land-wrap{min-height:100vh; background:linear-gradient(180deg,#EDEBFF 0%,#F7F5FF 55%,#FFFFFF 100%); font-family:'Plus Jakarta Sans',system-ui,sans-serif; padding-bottom:40px;}
+.land-head{position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between; padding:14px 18px; background:rgba(242,243,255,.92); backdrop-filter:blur(10px); border-bottom:1px solid #E7E7F3;}
+.land-logo{height:34px; width:auto; display:block;}
+.land-cta{background:linear-gradient(95deg,#6C4DFF,#9B6BFF); color:#fff; border:none; padding:10px 22px; border-radius:999px; font-family:'Fredoka',system-ui,sans-serif; font-weight:600; font-size:15px; cursor:pointer; box-shadow:0 8px 20px rgba(108,77,255,.3);}
+.land-tag{text-align:center; color:#6E6E86; font-size:14px; margin:14px 16px 6px;}
+.land-feed{max-width:430px; margin:0 auto; padding:10px 16px; cursor:pointer;}
+.land-note{text-align:center; color:#6E6E86; font-size:14px; padding:30px 0;}
+.land-card{background:#fff; border:1px solid #E7E7F3; border-radius:18px; padding:15px; margin-bottom:12px; box-shadow:0 2px 12px rgba(13,15,26,.04);}
+.land-byline{display:flex; align-items:center; gap:8px; margin-bottom:8px;}
+.land-avatar{width:26px; height:26px; border-radius:50%; display:grid; place-items:center; color:#fff; font-family:'Fredoka',sans-serif; font-weight:700; font-size:12px;}
+.land-name{font-weight:700; font-size:13.5px; color:#0D0F1A;}
+.land-meta{font-size:12px; color:#6E6E86;}
+.land-flair{font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; margin-bottom:5px;}
+.land-title{font-family:'Fredoka',system-ui,sans-serif; font-weight:600; font-size:17px; line-height:1.3; color:#0D0F1A; margin:0 0 5px;}
+.land-body{font-size:13px; color:#6E6E86; line-height:1.45; margin:0 0 10px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;}
+.land-foot{display:flex; align-items:center; gap:6px; font-size:12.5px; color:#6E6E86; border-top:1px solid #E7E7F3; padding-top:9px;}
+.land-lock{margin-left:auto; color:#6C4DFF; font-weight:700; font-size:12px;}
+.land-ov{position:fixed; inset:0; z-index:60; background:rgba(13,15,26,.35); backdrop-filter:blur(5px); overflow-y:auto;}
 .auth-logo{margin-bottom:14px;}
 .auth-mail{font-size:52px; margin-bottom:10px;}
 .auth-email{font-weight:800; color:#6C4DFF; font-size:16px; margin:2px 0 14px; word-break:break-all;}
