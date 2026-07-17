@@ -42,6 +42,17 @@ function Auth({ onDismiss }) {
   // usernames: lowercase letters, numbers, underscores
   const cleanUsername = (v) => v.replace(/[^a-z0-9_]/gi, "").toLowerCase().slice(0, 20);
 
+  const google = async () => {
+    setError("");
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo: window.location.origin },
+      });
+      if (error) throw error;
+    } catch (e) { setError(e.message || "Google sign-in failed."); }
+  };
+
   const submit = async () => {
     setError(""); setNote(""); setBusy(true);
     try {
@@ -112,6 +123,16 @@ function Auth({ onDismiss }) {
           {busy ? "One sec…" : mode === "signup" ? "Create account" : "Log in"}
         </button>
 
+        <div className="auth-div"><span>or</span></div>
+        <button className="auth-google" onClick={google}>
+          <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden>
+            <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3l5.7-5.7C34.5 6.1 29.5 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.2-.1-2.4-.4-3.5z"/>
+            <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.9 1.2 8 3l5.7-5.7C34.5 6.1 29.5 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/>
+            <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.3 0-9.7-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/>
+            <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.1-4.1 5.5l6.2 5.2C41 35.4 44 30.2 44 24c0-1.2-.1-2.4-.4-3.5z"/>
+          </svg>
+          Continue with Google
+        </button>
         <button className="auth-switch" onClick={() => { setMode(mode === "signup" ? "login" : "signup"); setError(""); setNote(""); }}>
           {mode === "signup" ? "Already have an account? Log in" : "New here? Create an account"}
         </button>
@@ -254,6 +275,10 @@ function AuthStyle() {
   border-radius:13px; font-family:'Fredoka',system-ui,sans-serif; font-weight:600; font-size:16px; cursor:pointer; margin-top:4px;
   box-shadow:0 10px 24px rgba(108,77,255,.3);}
 .auth-btn:disabled{opacity:.45; cursor:default; box-shadow:none;}
+.auth-div{display:flex; align-items:center; gap:12px; color:#A3A3B8; font-size:12.5px; margin:16px 0 12px;}
+.auth-div:before,.auth-div:after{content:""; height:1px; background:#E7E7F3; flex:1;}
+.auth-google{width:100%; display:inline-flex; align-items:center; justify-content:center; gap:10px; background:#fff; border:1.5px solid #E7E7F3; color:#0D0F1A; padding:13px; border-radius:13px; font-weight:700; font-size:15px; cursor:pointer; font-family:inherit;}
+.auth-google:hover{border-color:#C9C9DC;}
 .auth-switch{width:100%; background:none; border:none; color:#6C4DFF; font-weight:600; font-size:13.5px; cursor:pointer; margin-top:16px; font-family:inherit;}
 .auth-err{background:#FFE9F2; color:#C2185B; border-radius:10px; padding:10px 12px; font-size:13px; margin-bottom:11px; text-align:left;}
 .auth-note{background:#E9FBF6; color:#0C8C73; border-radius:10px; padding:10px 12px; font-size:13px; margin-bottom:11px; text-align:left;}

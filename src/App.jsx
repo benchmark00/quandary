@@ -3,7 +3,7 @@ import {
   Home, PlusCircle, Bookmark, Bell, User, Scale, Flame, Sparkles,
   MessageCircle, Star, Flag, Search, ChevronLeft, Check, HelpCircle,
   UserPlus, UserCheck, Send, X, Split, Droplet, Tent, ThumbsDown, Plus, Trash2,
-  Share, ArrowRight, Crown, Pencil, Eye, EyeOff,
+  Share, ArrowRight, Crown, Pencil, Eye, EyeOff, Shield, RefreshCw,
 } from "lucide-react";
 import { supabase } from "./lib/supabase.js";
 import { enablePush, pushSupported, isStandalone } from "./lib/push.js";
@@ -195,6 +195,13 @@ export default function Quandary() {
   const [me, setMe] = useState(null);
   const [qotdId, setQotdId] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [needsHandle, setNeedsHandle] = useState(false);
+  const [reports, setReports] = useState([]);
+  const scrollRef = useRef(null);
+  const [pullY, setPullY] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshingRef = useRef(false);
   const [viewUser, setViewUser] = useState(null);       // whose profile sheet is open
   const [viewUserTab, setViewUserTab] = useState("questions");
   const [followerCount, setFollowerCount] = useState(0);
@@ -213,7 +220,7 @@ export default function Quandary() {
       setMe(user.id);
 
       const [{ data: profiles }, { data: baseQs }] = await Promise.all([
-        supabase.from("profiles").select("id, name, handle, color, onboarded, is_admin"),
+        supabase.from("profiles").select("id, name, handle, color, onboarded, is_admin, needs_handle, created_at"),
         supabase.from("questions").select("id, author_id, flair, format, title, body, anonymous, anonymous_replies, hidden, created_at"),
       ]);
       (profiles || []).forEach((p) => { PROFILES[p.id] = p; });
@@ -221,6 +228,12 @@ export default function Quandary() {
       setOnboarded(myProfile ? myProfile.onboarded === true : true);
       const amAdmin = myProfile ? myProfile.is_admin === true : false;
       setIsAdmin(amAdmin);
+      setNeedsHandle(myProfile ? myProfile.needs_handle === true : false);
+      if (amAdmin) {
+        const { data: reps } = await supabase.from("reports")
+          .select("id, question_id, reporter_id, reason, created_at");
+        setReports(reps || []);
+      }
 
       const ids = (baseQs || []).map((q) => q.id);
       const inIds = ids.length ? ids : ["00000000-0000-0000-0000-000000000000"];
@@ -294,6 +307,46 @@ export default function Quandary() {
     }
   }
   useEffect(() => { loadAll(); }, []);
+
+  // Pull-to-refresh: drag down from the top of the feed to reload everything.
+  const doRefresh = async () => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true; setRefreshing(true);
+    try { await loadAll(); } finally {
+      setRefreshing(false); refreshingRef.current = false; setPullY(0);
+    }
+  };
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const st = { y: 0, active: false };
+    const onStart = (e) => {
+      st.active = el.scrollTop <= 0 && !refreshingRef.current;
+      st.y = e.touches[0].clientY;
+      if (st.active) setDragging(true);
+    };
+    const onMove = (e) => {
+      if (!st.active) return;
+      const dy = e.touches[0].clientY - st.y;
+      if (dy > 0 && el.scrollTop <= 0) { e.preventDefault(); setPullY(Math.min(dy * 0.45, 95)); }
+      else setPullY(0);
+    };
+    const onEnd = () => {
+      if (!st.active) return;
+      st.active = false; setDragging(false);
+      setPullY((y) => { if (y > 58) { doRefresh(); return 58; } return 0; });
+    };
+    el.addEventListener("touchstart", onStart, { passive: true });
+    el.addEventListener("touchmove", onMove, { passive: false });
+    el.addEventListener("touchend", onEnd);
+    el.addEventListener("touchcancel", onEnd);
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", onEnd);
+      el.removeEventListener("touchcancel", onEnd);
+    };
+  }, [loading]);
 
   // Item 10 — live feed: when anyone posts a question or reply, refresh.
   useEffect(() => {
@@ -444,6 +497,7 @@ export default function Quandary() {
     supabase.from("profiles").update({ onboarded: true }).eq("id", me)
       .then(({ error }) => { if (error) console.error("Couldn't save onboarding state:", error.message); });
   };
+  if (needsHandle) return (<div className="q-root"><Style /><div className="phone"><PickHandle me={me} onDone={() => { setNeedsHandle(false); loadAll(); }} /></div></div>);
   if (!onboarded) return (<div className="q-root"><Style /><div className="phone"><Onboarding onDone={finishOnboarding} prefs={prefs} setPrefs={setPrefsPersist} /></div></div>);
 
   return (
@@ -457,7 +511,11 @@ export default function Quandary() {
           </header>
         )}
 
-        <main className="scroll">
+        <main className="scroll" ref={scrollRef}>
+          <div className="ptr" style={{ height: refreshing ? 58 : pullY, transition: dragging ? "none" : "height .2s ease" }} aria-hidden>
+            <img src="/logo.png" alt="" className={"ptr-logo" + (refreshing ? " spin" : "")}
+              style={{ transform: refreshing ? undefined : `rotate(${pullY * 3.2}deg)`, opacity: Math.min((refreshing ? 58 : pullY) / 50, 1) }} />
+          </div>
           {tab === "feed" && (
             <Feed list={visible} qotd={filter === "all" && sort !== "following" ? questions.find((q) => q.id === qotdId) : null}
               filter={filter} setFilter={setFilter} sort={sort} setSort={setSort}
@@ -467,10 +525,11 @@ export default function Quandary() {
           {tab === "saved" && <Saved list={questions.filter((q) => saved.has(q.id))} onOpen={setOpen} saved={saved} onSave={toggleSave} following={following} onFollow={toggleFollow} onUser={openUser} me={me} />}
           {tab === "alerts" && <Alerts activity={activity} prefs={prefs} updatePrefs={updatePrefs} onOpen={setOpen} onUser={openUser} />}
           {tab === "you" && <Profile me={me} questions={questions} following={following} followerCount={followerCount} onFollow={toggleFollow} onOpen={setOpen} onUser={openUser} replay={() => setOnboarded(false)} />}
+          {tab === "admin" && isAdmin && <AdminPanel questions={questions} reports={reports} me={me} onOpen={setOpen} onUser={openUser} onToggleHidden={toggleHidden} />}
         </main>
 
         <nav className="tabbar">
-          {[["feed", Home, "Feed"], ["create", PlusCircle, "Ask"], ["saved", Bookmark, "Saved"], ["alerts", Bell, "Alerts"], ["you", User, "You"]].map(([k, Icon, label]) => (
+          {[["feed", Home, "Feed"], ["create", PlusCircle, "Ask"], ["saved", Bookmark, "Saved"], ["alerts", Bell, "Alerts"], ["you", User, "You"], ...(isAdmin ? [["admin", Shield, "Admin"]] : [])].map(([k, Icon, label]) => (
             <button key={k} className={"tabbtn" + (tab === k ? " active" : "")} onClick={() => setTab(k)}>
               <Icon size={22} strokeWidth={tab === k ? 2.4 : 1.8} /><span>{label}</span>
             </button>
@@ -1148,6 +1207,123 @@ function UserProfile({ userId, me, questions, following, initialTab = "questions
   );
 }
 
+/* ---------- PICK USERNAME (first login via Google) ---------- */
+function PickHandle({ me, onDone }) {
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const clean = (v) => v.replace(/[^a-z0-9_]/gi, "").toLowerCase().slice(0, 20);
+  const submit = async () => {
+    const h = clean(value);
+    if (h.length < 3) { setErr("At least 3 characters — letters, numbers, underscores."); return; }
+    setBusy(true); setErr("");
+    try {
+      const { data: taken } = await supabase.from("profiles").select("id").eq("handle", h).neq("id", me).maybeSingle();
+      if (taken) { setErr(`@${h} is taken — try another.`); setBusy(false); return; }
+      const { error } = await supabase.from("profiles").update({ handle: h, needs_handle: false }).eq("id", me);
+      if (error) throw error;
+      onDone();
+    } catch (e) { setErr(e.message || "Couldn't save that username."); setBusy(false); }
+  };
+  return (
+    <div className="onb">
+      <div className="onb-screen center">
+        <div className="onb-logo"><Logo size={84} /></div>
+        <h2 className="onb-h">Pick your username</h2>
+        <p className="onb-sub" style={{ textAlign: "center", maxWidth: 300 }}>This is how you'll appear on questions and polls. Choose wisely — or don't, funkyfish23 worked out fine.</p>
+        <div className="handlebox">
+          <span className="handle-at">@</span>
+          <input autoFocus value={value} onChange={(e) => setValue(clean(e.target.value))}
+            placeholder="funkyfish23" onKeyDown={(e) => e.key === "Enter" && !busy && submit()} />
+        </div>
+        {err && <div className="handle-err">{err}</div>}
+        <button className="btn-primary" disabled={busy || clean(value).length < 3} onClick={submit}>
+          {busy ? "Checking…" : "Claim it"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- ADMIN PANEL (phase 2) ---------- */
+function AdminPanel({ questions, reports, me, onOpen, onUser, onToggleHidden }) {
+  const [sec, setSec] = useState("signups");
+  const people = Object.values(PROFILES)
+    .filter((p) => p.created_at)
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+
+  const repByQ = {};
+  reports.forEach((r) => { (repByQ[r.question_id] = repByQ[r.question_id] || []).push(r); });
+  const reported = Object.keys(repByQ)
+    .map((qid) => ({ q: questions.find((x) => x.id === qid), reps: repByQ[qid] }))
+    .filter((x) => x.q)
+    .sort((a, b) => b.reps.length - a.reps.length);
+
+  const weekAgo = Date.now() - 7 * 864e5;
+  const stats = [
+    [people.length, "users"],
+    [questions.length, "questions"],
+    [questions.filter((q) => q.ts > weekAgo).length, "asked this week"],
+    [questions.reduce((n, q) => n + totalVotes(q), 0), "votes cast"],
+    [questions.reduce((n, q) => n + q.replies.length, 0), "replies"],
+    [questions.filter((q) => q.hidden).length, "hidden"],
+  ];
+
+  const fmtDate = (iso) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+
+  return (
+    <div className="padtop">
+      <h1 className="screen-title"><Shield size={22} style={{ verticalAlign: -3, color: "var(--purple)" }} /> Admin</h1>
+      <div className="segrow" style={{ marginBottom: 16 }}>
+        {[["signups", "Signups"], ["reports", `Reports${reported.length ? ` (${reported.length})` : ""}`], ["stats", "Stats"]].map(([k, l]) => (
+          <button key={k} className={"seg" + (sec === k ? " on" : "")} onClick={() => setSec(k)}>{l}</button>
+        ))}
+      </div>
+
+      {sec === "signups" && (
+        <div className="follist">
+          {people.map((p) => (
+            <div key={p.id} className="folrow">
+              <button className="byline as-btn" onClick={() => onUser(p.id)}>
+                <Avatar id={p.id} size={34} />
+                <div className="byline-txt">
+                  <span className="name">{p.name}{p.is_admin ? <span className="adminchip">admin</span> : null}</span>
+                  <span className="meta">@{p.handle} · joined {fmtDate(p.created_at)}</span>
+                </div>
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {sec === "reports" && (
+        reported.length === 0 ? <Empty title="No reports" body="Nothing has been flagged. Your community is behaving — for now." /> :
+        <div className="cards" style={{ padding: "4px 0 20px" }}>
+          {reported.map(({ q, reps }) => (
+            <div key={q.id} className="repcard">
+              <button className="as-btn repmain" onClick={() => onOpen(q.id)}>
+                <span className="minititle" style={{ WebkitLineClamp: 2 }}>{q.title}</span>
+                <span className="meta">{reps.length} {reps.length === 1 ? "report" : "reports"} · by {userById(q.authorId).name}{q.hidden ? " · currently hidden" : ""}</span>
+              </button>
+              <button className={"repbtn" + (q.hidden ? " restore" : "")} onClick={() => onToggleHidden(q.id, !q.hidden)}>
+                {q.hidden ? <><Eye size={14} /> Restore</> : <><EyeOff size={14} /> Hide</>}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {sec === "stats" && (
+        <div className="statgrid">
+          {stats.map(([n, label]) => (
+            <div key={label} className="statbox"><b>{n}</b><span>{label}</span></div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Empty({ title, body }) {
   return <div className="emptystate"><Logo size={44} sparks={false} /><div className="es-title">{title}</div><div className="es-body">{body}</div></div>;
 }
@@ -1433,6 +1609,24 @@ button.name.as-btn:hover{color:var(--purple);}
 .replydel{display:inline-flex; align-items:center; gap:3px; margin-left:auto; background:none; border:none; color:#C9C9DC; cursor:pointer; font-size:11px; font-weight:700; padding:2px 4px; border-radius:6px;}
 .replydel:hover{color:#C2185B;}
 .replydel.arm{color:#fff; background:#C2185B;}
+
+.ptr{display:flex; align-items:flex-end; justify-content:center; overflow:hidden;}
+.ptr-logo{width:30px; height:30px; margin-bottom:12px;}
+.ptr-logo.spin{animation:ptrspin .8s linear infinite;}
+@keyframes ptrspin{to{transform:rotate(360deg);}}
+.handlebox{display:flex; align-items:center; gap:2px; width:100%; max-width:300px; background:var(--white); border:1.5px solid var(--purple); border-radius:14px; padding:4px 14px; margin:6px 0 10px;}
+.handle-at{font-family:var(--disp); font-weight:600; font-size:18px; color:var(--purple);}
+.handlebox input{flex:1; border:none; outline:none; background:none; font-family:var(--body); font-size:16px; padding:11px 4px; color:var(--ink);}
+.handle-err{background:#FFE9F2; color:#C2185B; border-radius:10px; padding:9px 13px; font-size:13px; margin-bottom:10px; max-width:300px;}
+.adminchip{display:inline-block; margin-left:7px; background:#6c4dff14; color:var(--purple); font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; padding:2px 7px; border-radius:999px; vertical-align:1px;}
+.repcard{display:flex; align-items:center; gap:10px; background:var(--white); border:1px solid var(--line); border-radius:14px; padding:13px 14px;}
+.repmain{flex:1; display:flex; flex-direction:column; gap:3px; min-width:0;}
+.repbtn{display:inline-flex; align-items:center; gap:5px; background:#FFE9F2; color:#C2185B; border:none; border-radius:999px; padding:8px 13px; font-weight:700; font-size:12.5px; cursor:pointer; font-family:var(--body); flex-shrink:0;}
+.repbtn.restore{background:#E9FBF6; color:#0C8C73;}
+.statgrid{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+.statbox{background:var(--white); border:1px solid var(--line); border-radius:14px; padding:16px; text-align:center;}
+.statbox b{display:block; font-family:var(--disp); font-weight:600; font-size:26px; color:var(--ink);}
+.statbox span{font-size:12.5px; color:var(--muted);}
 
 .boot{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:40px; text-align:center; color:var(--muted); font-family:var(--disp); font-weight:600;}
 .booterr{color:#C2185B; background:#FFE9F2; border-radius:12px; padding:12px 16px; font-family:var(--body); font-weight:500; font-size:14px; max-width:300px;}
