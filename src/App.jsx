@@ -39,6 +39,13 @@ const PROFILES = {};
 const userById = (id) =>
   PROFILES[id] || { id, name: "Someone", handle: "someone", color: "#6C4DFF" };
 
+const REACTIONS = [
+  ["heart", "❤️"],
+  ["fire", "🔥"],
+  ["hundred", "💯"],
+  ["thumbsdown", "👎"],
+];
+
 let _id = 100;
 const nid = () => `x${_id++}`;
 const QOTD_ID = "q1";
@@ -257,7 +264,7 @@ export default function Quandary() {
       const ids = (baseQs || []).map((q) => q.id);
       const inIds = ids.length ? ids : ["00000000-0000-0000-0000-000000000000"];
 
-      const [opts, votes, myVotes, replies, clarifs, ratings, myFollows, mySaves, myFollowers, notifs, myPrefs, qotdRes] = await Promise.all([
+      const [opts, votes, myVotes, replies, clarifs, ratings, myFollows, mySaves, myFollowers, notifs, myPrefs, qotdRes, reactionsRes] = await Promise.all([
         supabase.from("question_options").select("id, question_id, label, position").in("question_id", inIds),
         supabase.from("vote_details").select("question_id, option_id, voter_id").in("question_id", inIds),
         supabase.from("votes").select("question_id, option_id").eq("voter_id", user.id),
@@ -270,8 +277,11 @@ export default function Quandary() {
         supabase.from("notifications").select("id, actor_id, type, question_id, created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(40),
         supabase.from("notification_prefs").select("every_question, followed_only, categories").eq("user_id", user.id).maybeSingle(),
         supabase.rpc("get_qotd"),
+        supabase.from("reactions").select("reply_id, user_id, emoji"),
       ]);
 
+      const reactByReply = {};
+      (reactionsRes.data || []).forEach((r) => { (reactByReply[r.reply_id] = reactByReply[r.reply_id] || []).push(r); });
       const myVoteByQ = {};
       (myVotes.data || []).forEach((v) => { myVoteByQ[v.question_id] = v.option_id; });
 
@@ -295,7 +305,12 @@ export default function Quandary() {
           return { id: o.id, text: o.label, voters };
         });
         const reps = (repG[q.id] || []).sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
-          .map((r) => ({ id: r.id, userId: r.author_id, text: r.body, ts: Date.parse(r.created_at) }));
+          .map((r) => {
+            const rr = reactByReply[r.id] || [];
+            const counts = {}; let mine = null;
+            rr.forEach((x) => { counts[x.emoji] = (counts[x.emoji] || 0) + 1; if (x.user_id === user.id) mine = x.emoji; });
+            return { id: r.id, userId: r.author_id, text: r.body, ts: Date.parse(r.created_at), reactions: counts, myReaction: mine };
+          });
         const clars = (clarG[q.id] || []).sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
           .map((c) => ({ id: c.id, userId: c.asker_id, text: c.body, ts: Date.parse(c.created_at), hidden: c.hidden,
             answer: c.answer_body ? { text: c.answer_body, ts: Date.parse(c.answered_at || c.created_at) } : null }));
@@ -449,6 +464,49 @@ export default function Quandary() {
       flash(has ? `Unfollowed ${userById(uId).name}` : `Following ${userById(uId).name}`);
     } catch (e) { flash(e.message); }
   };
+  const react = async (replyId, emoji) => {
+    // find current reaction for optimistic feel via reload
+    let current = null;
+    for (const q of questions) { const r = q.replies.find((x) => x.id === replyId); if (r) { current = r.myReaction; break; } }
+    try {
+      if (current === emoji) {
+        await supabase.from("reactions").delete().match({ reply_id: replyId, user_id: me });
+      } else {
+        await supabase.from("reactions").upsert({ reply_id: replyId, user_id: me, emoji }, { onConflict: "reply_id,user_id" });
+        track("reaction_added", { emoji });
+      }
+      await loadAll();
+    } catch (e) { flash(e.message); }
+  };
+
+  const shareQuestion = async (q) => {
+    const url = `${window.location.origin}/q/${q.id}`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: "Quandary", text: q.title, url });
+        track("question_shared", { method: "share" });
+      } else {
+        await navigator.clipboard.writeText(url);
+        flash("Link copied — send it to anyone");
+        track("question_shared", { method: "copy" });
+      }
+    } catch { /* user closed the share sheet — fine */ }
+  };
+  const shareInvite = async () => {
+    const url = "https://quandary.live";
+    const text = "Join me on Quandary — impossible hypotheticals, hot takes and dilemmas. Every hypothetical deserves an answer!";
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: "Quandary", text, url });
+        track("invite_shared", { method: "share" });
+      } else {
+        await navigator.clipboard.writeText(`${text} ${url}`);
+        flash("Invite copied — paste it anywhere");
+        track("invite_shared", { method: "copy" });
+      }
+    } catch { /* closed the sheet — fine */ }
+  };
+
   // Open any user's profile sheet (optionally landing on a specific tab).
   const openUser = (userId, tab = "questions") => {
     if (!userId) return;
@@ -586,7 +644,7 @@ export default function Quandary() {
           {tab === "create" && <Create onPost={createQuestion} me={me} />}
           {tab === "saved" && <Saved list={questions.filter((q) => saved.has(q.id))} onOpen={setOpen} saved={saved} onSave={toggleSave} following={following} onFollow={toggleFollow} onUser={openUser} me={me} />}
           {tab === "alerts" && <Alerts activity={activity} prefs={prefs} updatePrefs={updatePrefs} onOpen={setOpen} onUser={openUser} />}
-          {tab === "you" && <Profile me={me} questions={questions} following={following} followerCount={followerCount} onFollow={toggleFollow} onOpen={setOpen} onUser={openUser} replay={() => setOnboarded(false)} onAvatar={uploadAvatar} />}
+          {tab === "you" && <Profile me={me} questions={questions} following={following} followerCount={followerCount} onFollow={toggleFollow} onOpen={setOpen} onUser={openUser} replay={() => setOnboarded(false)} onAvatar={uploadAvatar} onInvite={shareInvite} />}
           {tab === "admin" && isAdmin && <AdminPanel questions={questions} reports={reports} me={me} onOpen={setOpen} onUser={openUser} onToggleHidden={toggleHidden} />}
         </main>
 
@@ -604,7 +662,7 @@ export default function Quandary() {
             onAskClarif={askClarif} onAnswerClarif={answerClarif}
             onEdit={editQuestion} onDelete={deleteQuestion} onOpenUser={openUser}
             isAdmin={isAdmin} onToggleHidden={toggleHidden} onDeleteReply={deleteReply}
-            onEditClarif={editClarif} onToggleClarifHidden={toggleClarifHidden} onDeleteClarif={deleteClarif} />
+            onEditClarif={editClarif} onToggleClarifHidden={toggleClarifHidden} onDeleteClarif={deleteClarif} onShare={shareQuestion} onReact={react} />
         )}
         {searchOpen && <SearchOverlay questions={questions} onClose={() => setSearchOpen(false)} onOpen={(id) => { setSearchOpen(false); setOpen(id); }} />}
         {viewUser && (
@@ -820,7 +878,7 @@ function Card({ q, me, saved, isFollowing, onOpen, onSave, onFollow, onUser }) {
 }
 
 /* ---------- DETAIL ---------- */
-function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onReport, onSave, onFollow, onAskClarif, onAnswerClarif, onEdit, onDelete, onOpenUser, isAdmin, onToggleHidden, onDeleteReply, onEditClarif, onToggleClarifHidden, onDeleteClarif }) {
+function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onReport, onSave, onFollow, onAskClarif, onAnswerClarif, onEdit, onDelete, onOpenUser, isAdmin, onToggleHidden, onDeleteReply, onEditClarif, onToggleClarifHidden, onDeleteClarif, onShare, onReact }) {
   const f = FLAIRS[q.flair]; const Icon = f.icon; const author = userById(q.authorId);
   const isAuthor = q.authorId === me;
   const [editing, setEditing] = useState(false);
@@ -833,7 +891,9 @@ function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onR
   const [clarAnsDraft, setClarAnsDraft] = useState("");
   const [confirmDelClar, setConfirmDelClar] = useState(null);
   const myVote = (q.options || []).find((o) => o.voters.includes(me));
-  const hasVoted = !!myVote; const votes = totalVotes(q); const myRating = q.ratings[me];
+  const hasVoted = !!myVote;
+  const revealed = hasVoted || isAuthor;   // the asker sees results without voting
+  const votes = totalVotes(q); const myRating = q.ratings[me];
   const [draft, setDraft] = useState("");
   const [clarDraft, setClarDraft] = useState("");
   const [answering, setAnswering] = useState(null);
@@ -910,13 +970,13 @@ function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onR
                 const mine = o.voters.includes(me);
                 return (
                   <div key={o.id}>
-                    <button className={"polopt" + (hasVoted ? " revealed" : "") + (mine ? " mine" : "")}
+                    <button className={"polopt" + (revealed ? " revealed" : "") + (mine ? " mine" : "")}
                       onClick={() => !hasVoted && onVote(q.id, o.id)} disabled={hasVoted} style={{ "--accent": f.tint }}>
-                      <span className="polfill" style={{ width: hasVoted ? `${pct}%` : "0%" }} />
+                      <span className="polfill" style={{ width: revealed ? `${pct}%` : "0%" }} />
                       <span className="poltext">{mine && <Check size={15} />}{o.text}</span>
-                      {hasVoted && <span className="polpct">{pct}%</span>}
+                      {revealed && <span className="polpct">{pct}%</span>}
                     </button>
-                    {hasVoted && !q.anon && o.voters.length > 0 && (
+                    {revealed && !q.anon && o.voters.length > 0 && (
                       <div className="voters">{o.voters.map((v, i) => v
                         ? <button key={v + i} className="vchip as-btn" onClick={() => onOpenUser && onOpenUser(v)}><Avatar id={v} size={18} />{userById(v).name.split(" ")[0]}</button>
                         : <span key={"anon" + i} className="vchip"><span className="avatar" style={{ width: 18, height: 18, background: "#C9C9DC", fontSize: 9 }}>?</span>anon</span>)}</div>
@@ -924,7 +984,7 @@ function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onR
                   </div>
                 );
               })}
-              <div className="pollmeta">{hasVoted ? `${votes} ${votes === 1 ? "vote" : "votes"}` : "Tap to weigh in"}{q.anon ? " · answers are anonymous" : ""}</div>
+              <div className="pollmeta">{revealed ? `${votes} ${votes === 1 ? "vote" : "votes"}${isAuthor && !hasVoted ? " · asker's preview — you can still vote" : ""}` : "Tap to weigh in"}{q.anon ? " · answers are anonymous" : ""}</div>
             </div>
           )}
 
@@ -989,6 +1049,9 @@ function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onR
             <button className={"actbtn" + (saved.has(q.id) ? " on" : "")} onClick={() => onSave(q.id)}>
               <Bookmark size={16} fill={saved.has(q.id) ? "currentColor" : "none"} /> {saved.has(q.id) ? "Saved" : "Save"}
             </button>
+            <button className="actbtn" onClick={() => onShare(q)}>
+              <Share size={16} /> Share
+            </button>
           </div>
 
           {isThread && (
@@ -1011,7 +1074,18 @@ function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onR
                         <Trash2 size={13} />{confirmDelReply === r.id ? " sure?" : ""}
                       </button>
                     )}
-                  </div><p>{r.text}</p></div>
+                  </div><p>{r.text}</p>
+                  <div className="reactbar">
+                    {REACTIONS.map(([key, glyph]) => {
+                      const c = (r.reactions && r.reactions[key]) || 0;
+                      const on = r.myReaction === key;
+                      return (
+                        <button key={key} className={"reactchip" + (on ? " on" : "")} onClick={() => onReact(r.id, key)} aria-label={key}>
+                          <span className="reactemoji">{glyph}</span>{c > 0 && <span className="reactcount">{c}</span>}
+                        </button>
+                      );
+                    })}
+                  </div></div>
                 </div>
               ))}
               {q.replies.length === 0 && <p className="empty-inline">No replies yet — go first.</p>}
@@ -1162,7 +1236,7 @@ function Alerts({ activity, prefs, updatePrefs, onOpen, onUser }) {
 }
 
 /* ---------- PROFILE ---------- */
-function Profile({ me, questions, following, followerCount = 0, onFollow, onOpen, onUser, replay, onAvatar }) {
+function Profile({ me, questions, following, followerCount = 0, onFollow, onOpen, onUser, replay, onAvatar, onInvite }) {
   const fileRef = useRef(null);
   const mine = questions.filter((q) => q.authorId === me); const u = userById(me);
   return (
@@ -1181,6 +1255,14 @@ function Profile({ me, questions, following, followerCount = 0, onFollow, onOpen
         <button className="as-stat" onClick={() => onUser && onUser(me, "followers")}><b>{followerCount}</b><span>followers</span></button>
         <button className="as-stat" onClick={() => onUser && onUser(me, "following")}><b>{following.size}</b><span>following</span></button>
       </div>
+      <button className="invitebox" onClick={onInvite}>
+        <div className="invite-txt">
+          <b>Know someone with strong opinions?</b>
+          <span>Invite your friends — the debates are better with your crew here.</span>
+        </div>
+        <span className="invite-go"><Share size={15} /> Invite</span>
+      </button>
+
       <div className="prefsub">People you follow</div>
       <div className="follist">
         {[...following].map((id) => (
@@ -1536,7 +1618,8 @@ html, body{height:100%; margin:0; overflow:hidden; overscroll-behavior:none;}
 .poll{display:flex; flex-direction:column; gap:10px; margin-bottom:6px;}
 .polopt{position:relative; width:100%; text-align:left; background:var(--white); border:1.5px solid var(--line); border-radius:14px; padding:14px; font-size:14.5px; font-weight:600; color:var(--ink); cursor:pointer; overflow:hidden; min-height:50px; display:flex; align-items:center; font-family:var(--body);}
 .polopt:not(.revealed):hover{border-color:var(--accent);}
-.polopt.revealed{cursor:default;} .polopt.mine{border-color:var(--accent);}
+.polopt.revealed:disabled{cursor:default;}
+.polopt.revealed:not(:disabled):hover{border-color:var(--accent);} .polopt.mine{border-color:var(--accent);}
 .polfill{position:absolute; left:0; top:0; bottom:0; background:color-mix(in srgb,var(--accent) 16%,transparent); border-right:2.5px solid var(--accent); transition:width .5s cubic-bezier(.2,.8,.2,1); z-index:0;}
 .poltext{position:relative; z-index:1; display:inline-flex; align-items:center; gap:6px;}
 .polpct{position:relative; z-index:1; margin-left:auto; font-family:var(--disp); font-weight:600;}
@@ -1738,6 +1821,22 @@ button.name.as-btn:hover{color:var(--purple);}
 .clar-admin{display:flex; gap:2px; align-items:center; justify-content:flex-end; margin-bottom:2px;}
 .clar-hiddentag{margin-right:auto; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; color:#9A6B00; background:#FFF6E6; padding:2px 8px; border-radius:999px;}
 .clar.isHidden .clar-q, .clar.isHidden .clar-a{opacity:.5;}
+
+.reactbar{display:flex; gap:6px; margin-top:8px; flex-wrap:wrap;}
+.reactchip{display:inline-flex; align-items:center; gap:4px; background:var(--lav); border:1.5px solid var(--line); border-radius:999px; padding:3px 9px; cursor:pointer; font-family:var(--body); line-height:1;}
+.reactchip:hover{border-color:#C9C9DC;}
+.reactchip.on{background:#6c4dff14; border-color:var(--purple);}
+.reactemoji{font-size:14px;}
+.reactcount{font-size:12px; font-weight:700; color:var(--muted);}
+.reactchip.on .reactcount{color:var(--purple);}
+
+.invitebox{display:flex; align-items:center; gap:12px; width:100%; text-align:left; margin:14px 0 6px; cursor:pointer;
+  background:linear-gradient(135deg,#6C4DFF 0%, #9B5BFF 60%, #B14DFF 100%); color:#fff; border:none; border-radius:18px; padding:15px 16px;
+  box-shadow:0 10px 26px rgba(108,77,255,.28);}
+.invite-txt{flex:1; display:flex; flex-direction:column; gap:2px;}
+.invite-txt b{font-family:var(--disp); font-weight:600; font-size:15.5px;}
+.invite-txt span{font-size:12.5px; opacity:.9; line-height:1.4;}
+.invite-go{display:inline-flex; align-items:center; gap:6px; background:rgba(255,255,255,.18); padding:9px 14px; border-radius:999px; font-weight:700; font-size:13px; flex-shrink:0;}
 
 .boot{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:40px; text-align:center; color:var(--muted); font-family:var(--disp); font-weight:600;}
 .booterr{color:#C2185B; background:#FFE9F2; border-radius:12px; padding:12px 16px; font-family:var(--body); font-weight:500; font-size:14px; max-width:300px;}
