@@ -13,6 +13,7 @@ import Quandary from "./App.jsx";
 export default function Root() {
   const [session, setSession] = useState(null);
   const [checking, setChecking] = useState(true);
+  const [recovery, setRecovery] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -22,13 +23,15 @@ export default function Root() {
     const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
       setSession(s);
       if (event === "SIGNED_IN" && s) { identifyUser(s.user.id); track("logged_in"); }
-      if (event === "SIGNED_OUT") resetAnalytics();
+      if (event === "PASSWORD_RECOVERY") setRecovery(true);
+      if (event === "SIGNED_OUT") { setRecovery(false); resetAnalytics(); }
     });
     return () => sub.subscription.unsubscribe();
   }, []);
 
   if (checking) return <Centered>Loading…</Centered>;
   if (!session) return <Landing />;
+  if (recovery) return <NewPassword onDone={() => setRecovery(false)} />;
 
   return <Quandary />;
 }
@@ -62,7 +65,12 @@ function Auth({ onDismiss }) {
   const submit = async () => {
     setError(""); setNote(""); setBusy(true);
     try {
-      if (mode === "signup") {
+      if (mode === "reset") {
+        const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+        if (error) throw error;
+        track("password_reset_requested");
+        setNote("Reset link sent — check your inbox (and spam). Tap it and you'll be back here setting a new password.");
+      } else if (mode === "signup") {
         const handle = cleanUsername(username);
         if (handle.length < 3) throw new Error("Pick a username of at least 3 characters (letters, numbers, underscores).");
         const { data, error } = await supabase.auth.signUp({
@@ -111,8 +119,8 @@ function Auth({ onDismiss }) {
         <div className="auth-logo">
           <img src="/logo.png" alt="Quandary" width="62" height="62" style={{ objectFit: "contain" }} draggable={false} />
         </div>
-        <h1 className="auth-title">{mode === "signup" ? "Join Quandary" : "Welcome back"}</h1>
-        <p className="auth-sub">Every hypothetical deserves an answer.</p>
+        <h1 className="auth-title">{mode === "signup" ? "Join Quandary" : mode === "reset" ? "Reset your password" : "Welcome back"}</h1>
+        <p className="auth-sub">{mode === "reset" ? "Tell us your email and we'll send a reset link." : "Every hypothetical deserves an answer."}</p>
 
         {mode === "signup" && (<>
           <input className="auth-in" placeholder="Display name" value={name} onChange={(e) => setName(e.target.value)} />
@@ -120,16 +128,22 @@ function Auth({ onDismiss }) {
             onChange={(e) => setUsername(cleanUsername(e.target.value))} />
         </>)}
         <input className="auth-in" type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <input className="auth-in" type="password" placeholder="Password (6+ characters)" value={password}
-          onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
+        {mode !== "reset" && (
+          <input className="auth-in" type="password" placeholder="Password (6+ characters)" value={password}
+            onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
+        )}
+        {mode === "login" && (
+          <button className="auth-forgot" onClick={() => { setMode("reset"); setError(""); setNote(""); }}>Forgot password?</button>
+        )}
 
         {error && <div className="auth-err">{error}</div>}
         {note && <div className="auth-note">{note}</div>}
 
-        <button className="auth-btn" disabled={busy || !email || password.length < 6 || (mode === "signup" && cleanUsername(username).length < 3)} onClick={submit}>
-          {busy ? "One sec…" : mode === "signup" ? "Create account" : "Log in"}
+        <button className="auth-btn" disabled={busy || !email || (mode !== "reset" && password.length < 6) || (mode === "signup" && cleanUsername(username).length < 3)} onClick={submit}>
+          {busy ? "One sec…" : mode === "signup" ? "Create account" : mode === "reset" ? "Send reset link" : "Log in"}
         </button>
 
+        {mode !== "reset" && (<>
         <div className="auth-div"><span>or</span></div>
         <button className="auth-google" onClick={google}>
           <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden>
@@ -140,8 +154,45 @@ function Auth({ onDismiss }) {
           </svg>
           Continue with Google
         </button>
-        <button className="auth-switch" onClick={() => { setMode(mode === "signup" ? "login" : "signup"); setError(""); setNote(""); }}>
-          {mode === "signup" ? "Already have an account? Log in" : "New here? Create an account"}
+        </>)}
+        <button className="auth-switch" onClick={() => { setMode(mode === "reset" || mode === "login" ? (mode === "reset" ? "login" : "signup") : "login"); setError(""); setNote(""); }}>
+          {mode === "signup" ? "Already have an account? Log in" : mode === "reset" ? "Back to log in" : "New here? Create an account"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+ *  NewPassword — shown after tapping a reset link (recovery session active).
+ * ------------------------------------------------------------------------- */
+function NewPassword({ onDone }) {
+  const [pw, setPw] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const save = async () => {
+    setBusy(true); setErr("");
+    try {
+      const { error } = await supabase.auth.updateUser({ password: pw });
+      if (error) throw error;
+      track("password_reset_completed");
+      onDone();
+    } catch (e) { setErr(e.message || "Couldn't set that password."); setBusy(false); }
+  };
+  return (
+    <div className="auth-wrap">
+      <AuthStyle />
+      <div className="auth-card">
+        <div className="auth-logo">
+          <img src="/logo.png" alt="Quandary" width="62" height="62" style={{ objectFit: "contain" }} draggable={false} />
+        </div>
+        <h1 className="auth-title">Set a new password</h1>
+        <p className="auth-sub">Pick something you'll actually remember this time. 😉</p>
+        <input className="auth-in" type="password" autoFocus placeholder="New password (6+ characters)"
+          value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && pw.length >= 6 && !busy && save()} />
+        {err && <div className="auth-err">{err}</div>}
+        <button className="auth-btn" disabled={busy || pw.length < 6} onClick={save}>
+          {busy ? "Saving…" : "Save and continue"}
         </button>
       </div>
     </div>
@@ -230,6 +281,11 @@ function Landing() {
         })}
       </div>
 
+      <footer className="land-footer">
+        <p>We use privacy-respecting analytics — including limited session recordings — to make Quandary better.</p>
+        <p>© Quandary · Every hypothetical deserves an answer.</p>
+      </footer>
+
       {showAuth && (
         <div className="land-ov">
           <Auth onDismiss={() => setShowAuth(false)} />
@@ -289,6 +345,10 @@ function AuthStyle() {
 .auth-div:before,.auth-div:after{content:""; height:1px; background:#E7E7F3; flex:1;}
 .auth-google{width:100%; display:inline-flex; align-items:center; justify-content:center; gap:10px; background:#fff; border:1.5px solid #E7E7F3; color:#0D0F1A; padding:13px; border-radius:13px; font-weight:700; font-size:15px; cursor:pointer; font-family:inherit;}
 .auth-google:hover{border-color:#C9C9DC;}
+.auth-forgot{width:100%; text-align:right; background:none; border:none; color:#6E6E86; font-size:12.5px; font-weight:600; cursor:pointer; font-family:inherit; padding:0 2px 10px; margin-top:-4px;}
+.auth-forgot:hover{color:#6C4DFF;}
+.land-footer{max-width:430px; margin:22px auto 0; padding:0 18px 26px; text-align:center; color:#A3A3B8; font-size:11.5px; line-height:1.65;}
+.land-footer p{margin:0 0 6px;}
 .auth-switch{width:100%; background:none; border:none; color:#6C4DFF; font-weight:600; font-size:13.5px; cursor:pointer; margin-top:16px; font-family:inherit;}
 .auth-err{background:#FFE9F2; color:#C2185B; border-radius:10px; padding:10px 12px; font-size:13px; margin-bottom:11px; text-align:left;}
 .auth-note{background:#E9FBF6; color:#0C8C73; border-radius:10px; padding:10px 12px; font-size:13px; margin-bottom:11px; text-align:left;}

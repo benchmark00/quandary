@@ -17,6 +17,12 @@ export function initAnalytics() {
     capture_pageview: true,     // sessions + time-on-app come from this
     autocapture: true,          // generic clicks; custom events cover the rest
     persistence: "localStorage",
+    // Session replay safety: everything people TYPE is masked (shown as ***)
+    // in recordings. Recording itself only runs once it's also switched on in
+    // PostHog → Settings → Session replay.
+    session_recording: {
+      maskAllInputs: true,
+    },
   });
 }
 
