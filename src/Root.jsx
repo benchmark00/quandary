@@ -164,7 +164,7 @@ function Landing() {
       try {
         const [qs, ps, vs, rs] = await Promise.all([
           supabase.from("questions").select("id, author_id, flair, title, body, created_at").eq("hidden", false).order("created_at", { ascending: false }).limit(20),
-          supabase.from("profiles").select("id, name, handle, color"),
+          supabase.from("profiles").select("id, name, handle, color, avatar_url"),
           supabase.from("vote_details").select("question_id"),
           supabase.from("reply_details").select("question_id"),
         ]);
@@ -205,7 +205,9 @@ function Landing() {
           return (
             <article key={q.id} className="land-card">
               <div className="land-byline">
-                <span className="land-avatar" style={{ background: a ? a.color : "#C9C9DC" }}>{a ? a.name[0] : "?"}</span>
+                {a && a.avatar_url
+                  ? <img src={a.avatar_url} alt="" className="land-avatar land-avatar-img" draggable={false} />
+                  : <span className="land-avatar" style={{ background: a ? a.color : "#C9C9DC" }}>{a ? a.name[0] : "?"}</span>}
                 <span className="land-name">{a ? a.name : "Someone"}</span>
                 <span className="land-meta">· {ago(q.created_at)}</span>
               </div>
@@ -254,6 +256,7 @@ function AuthStyle() {
 .land-card{background:#fff; border:1px solid #E7E7F3; border-radius:18px; padding:15px; margin-bottom:12px; box-shadow:0 2px 12px rgba(13,15,26,.04);}
 .land-byline{display:flex; align-items:center; gap:8px; margin-bottom:8px;}
 .land-avatar{width:26px; height:26px; border-radius:50%; display:grid; place-items:center; color:#fff; font-family:'Fredoka',sans-serif; font-weight:700; font-size:12px;}
+.land-avatar-img{object-fit:cover;}
 .land-name{font-weight:700; font-size:13.5px; color:#0D0F1A;}
 .land-meta{font-size:12px; color:#6E6E86;}
 .land-flair{font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; margin-bottom:5px;}

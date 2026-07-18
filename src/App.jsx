@@ -3,7 +3,7 @@ import {
   Home, PlusCircle, Bookmark, Bell, User, Scale, Flame, Sparkles,
   MessageCircle, Star, Flag, Search, ChevronLeft, Check, HelpCircle,
   UserPlus, UserCheck, Send, X, Split, Droplet, Tent, ThumbsDown, Plus, Trash2,
-  Share, ArrowRight, Crown, Pencil, Eye, EyeOff, Shield, RefreshCw,
+  Share, ArrowRight, Crown, Pencil, Eye, EyeOff, Shield, RefreshCw, Camera,
 } from "lucide-react";
 import { supabase } from "./lib/supabase.js";
 import { enablePush, pushSupported, isStandalone } from "./lib/push.js";
@@ -151,8 +151,25 @@ function Wordmark({ size = 28 }) {
 function Avatar({ id, size = 30 }) {
   if (!id) return <div className="avatar" style={{ width: size, height: size, background: "#C9C9DC", fontSize: size * 0.42 }}>?</div>;
   const u = userById(id);
+  if (u.avatar_url) return <img src={u.avatar_url} alt="" className="avatar avatar-img" style={{ width: size, height: size }} draggable={false} />;
   return <div className="avatar" style={{ width: size, height: size, background: u.color, fontSize: size * 0.42 }}>
     {u.name === "You" ? "Y" : u.name[0]}</div>;
+}
+
+/* Square-crop and shrink an image client-side before upload. */
+async function resizeImage(file, size = 256) {
+  const img = await new Promise((res, rej) => {
+    const i = new Image();
+    i.onload = () => res(i); i.onerror = rej;
+    i.src = URL.createObjectURL(file);
+  });
+  const canvas = document.createElement("canvas");
+  canvas.width = size; canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  const m = Math.min(img.width, img.height);
+  ctx.drawImage(img, (img.width - m) / 2, (img.height - m) / 2, m, m, 0, 0, size, size);
+  URL.revokeObjectURL(img.src);
+  return new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.85));
 }
 function Stars({ value, onRate, size = 16, mine }) {
   return (
@@ -220,7 +237,7 @@ export default function Quandary() {
       setMe(user.id);
 
       const [{ data: profiles }, { data: baseQs }] = await Promise.all([
-        supabase.from("profiles").select("id, name, handle, color, onboarded, is_admin, needs_handle, created_at"),
+        supabase.from("profiles").select("id, name, handle, color, onboarded, is_admin, needs_handle, created_at, avatar_url"),
         supabase.from("questions").select("id, author_id, flair, format, title, body, anonymous, anonymous_replies, hidden, created_at"),
       ]);
       (profiles || []).forEach((p) => { PROFILES[p.id] = p; });
@@ -243,7 +260,7 @@ export default function Quandary() {
         supabase.from("vote_details").select("question_id, option_id, voter_id").in("question_id", inIds),
         supabase.from("votes").select("question_id, option_id").eq("voter_id", user.id),
         supabase.from("reply_details").select("id, question_id, author_id, body, created_at").in("question_id", inIds),
-        supabase.from("clarifications").select("id, question_id, asker_id, body, answer_body, answered_at, created_at").in("question_id", inIds),
+        supabase.from("clarifications").select("id, question_id, asker_id, body, answer_body, answered_at, created_at, hidden").in("question_id", inIds),
         supabase.from("ratings").select("question_id, rater_id, stars").in("question_id", inIds),
         supabase.from("follows").select("followee_id").eq("follower_id", user.id),
         supabase.from("saves").select("question_id").eq("user_id", user.id),
@@ -278,7 +295,7 @@ export default function Quandary() {
         const reps = (repG[q.id] || []).sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
           .map((r) => ({ id: r.id, userId: r.author_id, text: r.body, ts: Date.parse(r.created_at) }));
         const clars = (clarG[q.id] || []).sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
-          .map((c) => ({ id: c.id, userId: c.asker_id, text: c.body, ts: Date.parse(c.created_at),
+          .map((c) => ({ id: c.id, userId: c.asker_id, text: c.body, ts: Date.parse(c.created_at), hidden: c.hidden,
             answer: c.answer_body ? { text: c.answer_body, ts: Date.parse(c.answered_at || c.created_at) } : null }));
         const rts = {}; (ratG[q.id] || []).forEach((r) => { rts[r.rater_id] = r.stars; });
         return { id: q.id, authorId: q.author_id, flair: q.flair, format: q.format, anon: q.anonymous, anonReplies: q.anonymous_replies, hidden: q.hidden,
@@ -456,6 +473,44 @@ export default function Quandary() {
       await loadAll(); flash("Reply deleted");
     } catch (e) { flash(e.message); }
   };
+  const editClarif = async (cId, body, answerBody) => {
+    try {
+      const { error } = await supabase.from("clarifications")
+        .update({ body, answer_body: answerBody === "" ? null : answerBody }).eq("id", cId);
+      if (error) throw error;
+      await loadAll(); flash("Clarification updated");
+    } catch (e) { flash(e.message); }
+  };
+  const toggleClarifHidden = async (cId, hide) => {
+    try {
+      const { error } = await supabase.from("clarifications").update({ hidden: hide }).eq("id", cId);
+      if (error) throw error;
+      await loadAll(); flash(hide ? "Clarification hidden" : "Clarification restored");
+    } catch (e) { flash(e.message); }
+  };
+  const deleteClarif = async (cId) => {
+    try {
+      const { error } = await supabase.from("clarifications").delete().eq("id", cId);
+      if (error) throw error;
+      await loadAll(); flash("Clarification deleted");
+    } catch (e) { flash(e.message); }
+  };
+  const uploadAvatar = async (file) => {
+    if (!file || !file.type.startsWith("image/")) { flash("Please choose an image file."); return; }
+    try {
+      flash("Uploading photo…");
+      const blob = await resizeImage(file, 256);
+      const path = `${me}/avatar.jpg`;
+      const { error: upErr } = await supabase.storage.from("avatars")
+        .upload(path, blob, { upsert: true, contentType: "image/jpeg" });
+      if (upErr) throw upErr;
+      const { data } = supabase.storage.from("avatars").getPublicUrl(path);
+      const url = `${data.publicUrl}?v=${Date.now()}`;
+      const { error } = await supabase.from("profiles").update({ avatar_url: url }).eq("id", me);
+      if (error) throw error;
+      await loadAll(); flash("Profile photo updated");
+    } catch (e) { flash(e.message || "Upload failed"); }
+  };
   const deleteQuestion = async (qId) => {
     try {
       const { error } = await supabase.from("questions").delete().eq("id", qId);
@@ -524,7 +579,7 @@ export default function Quandary() {
           {tab === "create" && <Create onPost={createQuestion} me={me} />}
           {tab === "saved" && <Saved list={questions.filter((q) => saved.has(q.id))} onOpen={setOpen} saved={saved} onSave={toggleSave} following={following} onFollow={toggleFollow} onUser={openUser} me={me} />}
           {tab === "alerts" && <Alerts activity={activity} prefs={prefs} updatePrefs={updatePrefs} onOpen={setOpen} onUser={openUser} />}
-          {tab === "you" && <Profile me={me} questions={questions} following={following} followerCount={followerCount} onFollow={toggleFollow} onOpen={setOpen} onUser={openUser} replay={() => setOnboarded(false)} />}
+          {tab === "you" && <Profile me={me} questions={questions} following={following} followerCount={followerCount} onFollow={toggleFollow} onOpen={setOpen} onUser={openUser} replay={() => setOnboarded(false)} onAvatar={uploadAvatar} />}
           {tab === "admin" && isAdmin && <AdminPanel questions={questions} reports={reports} me={me} onOpen={setOpen} onUser={openUser} onToggleHidden={toggleHidden} />}
         </main>
 
@@ -541,7 +596,8 @@ export default function Quandary() {
             onVote={vote} onRate={rate} onReply={reply} onReport={report} onSave={toggleSave} onFollow={toggleFollow}
             onAskClarif={askClarif} onAnswerClarif={answerClarif}
             onEdit={editQuestion} onDelete={deleteQuestion} onOpenUser={openUser}
-            isAdmin={isAdmin} onToggleHidden={toggleHidden} onDeleteReply={deleteReply} />
+            isAdmin={isAdmin} onToggleHidden={toggleHidden} onDeleteReply={deleteReply}
+            onEditClarif={editClarif} onToggleClarifHidden={toggleClarifHidden} onDeleteClarif={deleteClarif} />
         )}
         {searchOpen && <SearchOverlay questions={questions} onClose={() => setSearchOpen(false)} onOpen={(id) => { setSearchOpen(false); setOpen(id); }} />}
         {viewUser && (
@@ -757,7 +813,7 @@ function Card({ q, me, saved, isFollowing, onOpen, onSave, onFollow, onUser }) {
 }
 
 /* ---------- DETAIL ---------- */
-function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onReport, onSave, onFollow, onAskClarif, onAnswerClarif, onEdit, onDelete, onOpenUser, isAdmin, onToggleHidden, onDeleteReply }) {
+function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onReport, onSave, onFollow, onAskClarif, onAnswerClarif, onEdit, onDelete, onOpenUser, isAdmin, onToggleHidden, onDeleteReply, onEditClarif, onToggleClarifHidden, onDeleteClarif }) {
   const f = FLAIRS[q.flair]; const Icon = f.icon; const author = userById(q.authorId);
   const isAuthor = q.authorId === me;
   const [editing, setEditing] = useState(false);
@@ -765,6 +821,10 @@ function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onR
   const [bDraft, setBDraft] = useState(q.body);
   const [confirmDel, setConfirmDel] = useState(false);
   const [confirmDelReply, setConfirmDelReply] = useState(null);
+  const [clarEditId, setClarEditId] = useState(null);
+  const [clarBodyDraft, setClarBodyDraft] = useState("");
+  const [clarAnsDraft, setClarAnsDraft] = useState("");
+  const [confirmDelClar, setConfirmDelClar] = useState(null);
   const myVote = (q.options || []).find((o) => o.voters.includes(me));
   const hasVoted = !!myVote; const votes = totalVotes(q); const myRating = q.ratings[me];
   const [draft, setDraft] = useState("");
@@ -866,19 +926,46 @@ function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onR
             <div className="clarsec-h"><HelpCircle size={15} /> Clarifying questions</div>
             {q.clarifs.length === 0 && <p className="empty-inline">No one's asked for clarification yet.</p>}
             {q.clarifs.map((c) => (
-              <div key={c.id} className="clar">
-                <div className="clar-q"><Avatar id={c.userId} size={22} /><div><span className="name sm">{userById(c.userId).name.split(" ")[0]} asks</span><p>{c.text}</p></div></div>
-                {c.answer ? (
-                  <div className="clar-a"><span className="clar-badge">{author.name.split(" ")[0]} answered</span><p>{c.answer.text}</p></div>
-                ) : isAuthor ? (
-                  answering === c.id ? (
-                    <div className="clar-answerbox">
-                      <input autoFocus value={ansDraft} onChange={(e) => setAnsDraft(e.target.value)} placeholder="Answer this…"
-                        onKeyDown={(e) => { if (e.key === "Enter" && ansDraft.trim()) { onAnswerClarif(q.id, c.id, ansDraft.trim()); setAnsDraft(""); setAnswering(null); } }} />
-                      <button className="sendbtn sm" disabled={!ansDraft.trim()} onClick={() => { if (ansDraft.trim()) { onAnswerClarif(q.id, c.id, ansDraft.trim()); setAnsDraft(""); setAnswering(null); } }}><Send size={15} /></button>
+              <div key={c.id} className={"clar" + (c.hidden ? " isHidden" : "")}>
+                {isAdmin && (
+                  <div className="clar-admin">
+                    {c.hidden && <span className="clar-hiddentag">hidden</span>}
+                    <button className="iconbtn sm" title="Edit"
+                      onClick={() => { setClarEditId(c.id); setClarBodyDraft(c.text); setClarAnsDraft(c.answer ? c.answer.text : ""); }}>
+                      <Pencil size={13} /></button>
+                    <button className="iconbtn sm" title={c.hidden ? "Restore" : "Hide"}
+                      onClick={() => onToggleClarifHidden(c.id, !c.hidden)}>
+                      {c.hidden ? <Eye size={13} /> : <EyeOff size={13} />}</button>
+                    <button className={"replydel" + (confirmDelClar === c.id ? " arm" : "")}
+                      onClick={() => confirmDelClar === c.id ? (onDeleteClarif(c.id), setConfirmDelClar(null)) : setConfirmDelClar(c.id)}
+                      title={confirmDelClar === c.id ? "Tap again to delete" : "Delete"}>
+                      <Trash2 size={13} />{confirmDelClar === c.id ? " sure?" : ""}</button>
+                  </div>
+                )}
+                {clarEditId === c.id ? (
+                  <div className="editbox" style={{ margin: "4px 0 6px" }}>
+                    <textarea rows={2} value={clarBodyDraft} onChange={(e) => setClarBodyDraft(e.target.value)} />
+                    <textarea rows={2} placeholder="Answer (leave empty to remove the answer)" value={clarAnsDraft} onChange={(e) => setClarAnsDraft(e.target.value)} />
+                    <div className="editrow">
+                      <button className="confirm-keep" onClick={() => setClarEditId(null)}>Cancel</button>
+                      <button className="edit-save" disabled={!clarBodyDraft.trim()}
+                        onClick={() => { onEditClarif(c.id, clarBodyDraft.trim(), clarAnsDraft.trim()); setClarEditId(null); }}>Save</button>
                     </div>
-                  ) : <button className="clar-answer" onClick={() => setAnswering(c.id)}>Answer this</button>
-                ) : <span className="clar-pending">Waiting on the asker…</span>}
+                  </div>
+                ) : (<>
+                  <div className="clar-q"><Avatar id={c.userId} size={22} /><div><span className="name sm">{userById(c.userId).name.split(" ")[0]} asks</span><p>{c.text}</p></div></div>
+                  {c.answer ? (
+                    <div className="clar-a"><span className="clar-badge">{author.name.split(" ")[0]} answered</span><p>{c.answer.text}</p></div>
+                  ) : isAuthor ? (
+                    answering === c.id ? (
+                      <div className="clar-answerbox">
+                        <input autoFocus value={ansDraft} onChange={(e) => setAnsDraft(e.target.value)} placeholder="Answer this…"
+                          onKeyDown={(e) => { if (e.key === "Enter" && ansDraft.trim()) { onAnswerClarif(q.id, c.id, ansDraft.trim()); setAnsDraft(""); setAnswering(null); } }} />
+                        <button className="sendbtn sm" disabled={!ansDraft.trim()} onClick={() => { if (ansDraft.trim()) { onAnswerClarif(q.id, c.id, ansDraft.trim()); setAnsDraft(""); setAnswering(null); } }}><Send size={15} /></button>
+                      </div>
+                    ) : <button className="clar-answer" onClick={() => setAnswering(c.id)}>Answer this</button>
+                  ) : <span className="clar-pending">Waiting on the asker…</span>}
+                </>)}
               </div>
             ))}
             {!isAuthor && (
@@ -1068,11 +1155,20 @@ function Alerts({ activity, prefs, updatePrefs, onOpen, onUser }) {
 }
 
 /* ---------- PROFILE ---------- */
-function Profile({ me, questions, following, followerCount = 0, onFollow, onOpen, onUser, replay }) {
+function Profile({ me, questions, following, followerCount = 0, onFollow, onOpen, onUser, replay, onAvatar }) {
+  const fileRef = useRef(null);
   const mine = questions.filter((q) => q.authorId === me); const u = userById(me);
   return (
     <div className="padtop">
-      <div className="profhead"><Avatar id={me} size={64} /><div><div className="profname">{u.name}</div><div className="meta">@{u.handle}</div></div></div>
+      <div className="profhead">
+        <button className="avatarwrap" onClick={() => fileRef.current && fileRef.current.click()} aria-label="Change profile photo">
+          <Avatar id={me} size={64} />
+          <span className="avatarcam"><Camera size={12} /></span>
+        </button>
+        <input type="file" accept="image/*" ref={fileRef} style={{ display: "none" }}
+          onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; if (f) onAvatar(f); }} />
+        <div><div className="profname">{u.name}</div><div className="meta">@{u.handle}</div></div>
+      </div>
       <div className="profstats">
         <div><b>{mine.length}</b><span>asked</span></div>
         <button className="as-stat" onClick={() => onUser && onUser(me, "followers")}><b>{followerCount}</b><span>followers</span></button>
@@ -1627,6 +1723,13 @@ button.name.as-btn:hover{color:var(--purple);}
 .statbox{background:var(--white); border:1px solid var(--line); border-radius:14px; padding:16px; text-align:center;}
 .statbox b{display:block; font-family:var(--disp); font-weight:600; font-size:26px; color:var(--ink);}
 .statbox span{font-size:12.5px; color:var(--muted);}
+
+.avatar-img{object-fit:cover; border-radius:50%; flex-shrink:0; display:block;}
+.avatarwrap{position:relative; background:none; border:none; padding:0; cursor:pointer;}
+.avatarcam{position:absolute; right:-2px; bottom:-2px; width:24px; height:24px; border-radius:50%; background:var(--purple); color:#fff; display:grid; place-items:center; border:2.5px solid var(--lav);}
+.clar-admin{display:flex; gap:2px; align-items:center; justify-content:flex-end; margin-bottom:2px;}
+.clar-hiddentag{margin-right:auto; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; color:#9A6B00; background:#FFF6E6; padding:2px 8px; border-radius:999px;}
+.clar.isHidden .clar-q, .clar.isHidden .clar-a{opacity:.5;}
 
 .boot{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:40px; text-align:center; color:var(--muted); font-family:var(--disp); font-weight:600;}
 .booterr{color:#C2185B; background:#FFE9F2; border-radius:12px; padding:12px 16px; font-family:var(--body); font-weight:500; font-size:14px; max-width:300px;}
