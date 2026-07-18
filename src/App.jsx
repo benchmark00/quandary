@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { supabase } from "./lib/supabase.js";
 import { enablePush, pushSupported, isStandalone } from "./lib/push.js";
+import { identifyUser, track } from "./lib/analytics.js";
 
 /* ================================================================== *
  *  QUANDARY  —  Every hypothetical deserves an answer.
@@ -245,6 +246,7 @@ export default function Quandary() {
       setOnboarded(myProfile ? myProfile.onboarded === true : true);
       const amAdmin = myProfile ? myProfile.is_admin === true : false;
       setIsAdmin(amAdmin);
+      if (myProfile) identifyUser(user.id, { handle: myProfile.handle, name: myProfile.name, is_admin: amAdmin });
       setNeedsHandle(myProfile ? myProfile.needs_handle === true : false);
       if (amAdmin) {
         const { data: reps } = await supabase.from("reports")
@@ -403,27 +405,28 @@ export default function Quandary() {
       const { error } = await supabase.from("votes").insert({ question_id: qId, option_id: optId, voter_id: me });
       if (error && error.code === "23505") flash("You've already weighed in on this one");
       else if (error) throw error;
+      else track("vote_cast");
       await loadAll();
     } catch (e) { flash(e.message); }
   };
   const rate = async (qId, n) => {
-    try { await supabase.from("ratings").upsert({ question_id: qId, rater_id: me, stars: n }, { onConflict: "question_id,rater_id" }); await loadAll(); }
+    try { await supabase.from("ratings").upsert({ question_id: qId, rater_id: me, stars: n }, { onConflict: "question_id,rater_id" }); track("rating_given", { stars: n }); await loadAll(); }
     catch (e) { flash(e.message); }
   };
   const reply = async (qId, text) => {
-    try { await supabase.from("replies").insert({ question_id: qId, author_id: me, body: text }); await loadAll(); }
+    try { await supabase.from("replies").insert({ question_id: qId, author_id: me, body: text }); track("reply_posted"); await loadAll(); }
     catch (e) { flash(e.message); }
   };
   const askClarif = async (qId, text) => {
-    try { await supabase.from("clarifications").insert({ question_id: qId, asker_id: me, body: text }); flash("Sent to the asker"); await loadAll(); }
+    try { await supabase.from("clarifications").insert({ question_id: qId, asker_id: me, body: text }); track("clarification_asked"); flash("Sent to the asker"); await loadAll(); }
     catch (e) { flash(e.message); }
   };
   const answerClarif = async (qId, cId, text) => {
-    try { await supabase.from("clarifications").update({ answer_body: text }).eq("id", cId); await loadAll(); }
+    try { await supabase.from("clarifications").update({ answer_body: text }).eq("id", cId); track("clarification_answered"); await loadAll(); }
     catch (e) { flash(e.message); }
   };
   const report = async (qId) => {
-    try { await supabase.from("reports").insert({ question_id: qId, reporter_id: me }); flash("Reported — a moderator will take a look."); }
+    try { await supabase.from("reports").insert({ question_id: qId, reporter_id: me }); track("question_reported"); flash("Reported — a moderator will take a look."); }
     catch (e) { flash(e.code === "23505" ? "You've already reported this." : e.message); }
   };
   const toggleSave = async (qId) => {
@@ -432,6 +435,7 @@ export default function Quandary() {
       if (has) await supabase.from("saves").delete().match({ user_id: me, question_id: qId });
       else await supabase.from("saves").insert({ user_id: me, question_id: qId });
       setSaved((s) => { const n = new Set(s); has ? n.delete(qId) : n.add(qId); return n; });
+      if (!has) track("question_saved");
       flash(has ? "Removed from saved" : "Saved to your list");
     } catch (e) { flash(e.message); }
   };
@@ -441,6 +445,7 @@ export default function Quandary() {
       if (has) await supabase.from("follows").delete().match({ follower_id: me, followee_id: uId });
       else await supabase.from("follows").insert({ follower_id: me, followee_id: uId });
       setFollowing((s) => { const n = new Set(s); has ? n.delete(uId) : n.add(uId); return n; });
+      if (!has) track("user_followed");
       flash(has ? `Unfollowed ${userById(uId).name}` : `Following ${userById(uId).name}`);
     } catch (e) { flash(e.message); }
   };
@@ -529,6 +534,7 @@ export default function Quandary() {
           .insert(q.options.map((o, i) => ({ question_id: inserted.id, label: o.text, position: i })));
         if (oErr) throw oErr;
       }
+      track("question_posted", { flair: q.flair, format: q.format, anonymous: q.anon, anonymous_replies: !!q.anonReplies });
       await loadAll(); setTab("feed"); setFilter("all"); setSort("new"); flash("Posted — your question is live");
     } catch (e) { flash(e.message); }
   };
@@ -549,6 +555,7 @@ export default function Quandary() {
   if (error) return (<div className="q-root"><Style /><div className="phone"><div className="boot"><div className="booterr">{error}</div><button className="bootbtn" onClick={() => { setLoading(true); loadAll(); }}>Try again</button></div></div></div>);
   const finishOnboarding = () => {
     setOnboarded(true);
+    track("onboarding_completed");
     supabase.from("profiles").update({ onboarded: true }).eq("id", me)
       .then(({ error }) => { if (error) console.error("Couldn't save onboarding state:", error.message); });
   };
@@ -585,7 +592,7 @@ export default function Quandary() {
 
         <nav className="tabbar">
           {[["feed", Home, "Feed"], ["create", PlusCircle, "Ask"], ["saved", Bookmark, "Saved"], ["alerts", Bell, "Alerts"], ["you", User, "You"], ...(isAdmin ? [["admin", Shield, "Admin"]] : [])].map(([k, Icon, label]) => (
-            <button key={k} className={"tabbtn" + (tab === k ? " active" : "")} onClick={() => setTab(k)}>
+            <button key={k} className={"tabbtn" + (tab === k ? " active" : "")} onClick={() => { setTab(k); track("tab_viewed", { tab: k }); }}>
               <Icon size={22} strokeWidth={tab === k ? 2.4 : 1.8} /><span>{label}</span>
             </button>
           ))}
@@ -1107,7 +1114,7 @@ function Alerts({ activity, prefs, updatePrefs, onOpen, onUser }) {
   }, []);
   const turnOn = async () => {
     setPushMsg(""); setPushState("working");
-    try { await enablePush(); setPushState("on"); setPushMsg("Subscribed on this device."); }
+    try { await enablePush(); setPushState("on"); setPushMsg("Subscribed on this device."); track("push_enabled"); }
     catch (e) {
       setPushState("error");
       if (typeof Notification !== "undefined" && Notification.permission === "denied") {
@@ -1318,6 +1325,7 @@ function PickHandle({ me, onDone }) {
       if (taken) { setErr(`@${h} is taken — try another.`); setBusy(false); return; }
       const { error } = await supabase.from("profiles").update({ handle: h, needs_handle: false }).eq("id", me);
       if (error) throw error;
+      track("username_claimed");
       onDone();
     } catch (e) { setErr(e.message || "Couldn't save that username."); setBusy(false); }
   };

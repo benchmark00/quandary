@@ -1,6 +1,9 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import Root from "./Root.jsx";
+import { initAnalytics } from "./lib/analytics.js";
+
+initAnalytics();
 
 createRoot(document.getElementById("root")).render(<Root />);
 

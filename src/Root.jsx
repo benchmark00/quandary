@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { supabase } from "./lib/supabase.js";
+import { identifyUser, track, resetAnalytics } from "./lib/analytics.js";
 import Quandary from "./App.jsx";
 
 /* ---------------------------------------------------------------------------
@@ -18,7 +19,11 @@ export default function Root() {
       setSession(data.session);
       setChecking(false);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+      setSession(s);
+      if (event === "SIGNED_IN" && s) { identifyUser(s.user.id); track("logged_in"); }
+      if (event === "SIGNED_OUT") resetAnalytics();
+    });
     return () => sub.subscription.unsubscribe();
   }, []);
 
@@ -44,6 +49,7 @@ function Auth({ onDismiss }) {
 
   const google = async () => {
     setError("");
+    track("signup_started", { method: "google" });
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
@@ -64,6 +70,7 @@ function Auth({ onDismiss }) {
           options: { data: { name: name.trim() || handle, handle } },
         });
         if (error) throw error;
+        track("signup_started", { method: "email" });
         if (!data.session) { setAwaiting(email); return; }
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
