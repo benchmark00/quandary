@@ -66,6 +66,13 @@ const payload = (title: string, body: string, url = "/") =>
 
 Deno.serve(async (req) => {
   try {
+    // HIGH-3: only callers that know the shared secret (our DB triggers) may
+    // invoke this. Everyone else on the internet gets a 401.
+    const secret = Deno.env.get("PUSH_SECRET");
+    if (secret && req.headers.get("x-push-secret") !== secret) {
+      return new Response("unauthorized", { status: 401 });
+    }
+
     const body = await req.json();
     const type = body.type || "question"; // older question trigger sends no type
     const rec = body.record;
