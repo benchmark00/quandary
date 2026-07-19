@@ -4,6 +4,7 @@ import {
   MessageCircle, Star, Flag, Search, ChevronLeft, Check, HelpCircle,
   UserPlus, UserCheck, Send, X, Split, Droplet, Tent, ThumbsDown, Plus, Trash2,
   Share, ArrowRight, Crown, Pencil, Eye, EyeOff, Shield, RefreshCw, Camera,
+  Image as ImageIcon,
 } from "lucide-react";
 import { supabase } from "./lib/supabase.js";
 import { enablePush, pushSupported, isStandalone } from "./lib/push.js";
@@ -479,6 +480,131 @@ export default function Quandary() {
     } catch (e) { flash(e.message); }
   };
 
+  /* ---------------------------------------------------------------------
+   *  Personalized shareable results card (1080x1920, Story-shaped).
+   *  Renders client-side with canvas -- no server round-trip, always on-brand.
+   * ------------------------------------------------------------------- */
+  const shareResultsCard = async (q, myOptId) => {
+    try {
+      await Promise.all([
+        document.fonts.load("700 60px Fredoka"),
+        document.fonts.load("600 44px Fredoka"),
+        document.fonts.load("800 40px \'Plus Jakarta Sans\'"),
+        document.fonts.load("700 34px \'Plus Jakarta Sans\'"),
+      ]).catch(() => {});
+
+      const W = 1080, H = 1920;
+      const canvas = document.createElement("canvas");
+      canvas.width = W; canvas.height = H;
+      const ctx = canvas.getContext("2d");
+
+      const bg = ctx.createLinearGradient(0, 0, W, H);
+      bg.addColorStop(0, "#5B3FE0"); bg.addColorStop(1, "#8A4DFF");
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+
+      const glow = ctx.createRadialGradient(W * 0.85, 220, 40, W * 0.85, 220, 520);
+      glow.addColorStop(0, "rgba(255,255,255,0.16)"); glow.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = glow; ctx.fillRect(0, 0, W, H);
+
+      const wrap = (text, x, y, maxWidth, lineHeight, font, color, align = "left") => {
+        ctx.font = font; ctx.fillStyle = color; ctx.textAlign = align;
+        const words = text.split(" "); let line = "", cy = y; const lines = [];
+        for (const w of words) {
+          const test = line ? line + " " + w : w;
+          if (ctx.measureText(test).width > maxWidth && line) { lines.push(line); line = w; }
+          else line = test;
+        }
+        lines.push(line);
+        lines.forEach((l) => { ctx.fillText(l, x, cy); cy += lineHeight; });
+        return cy;
+      };
+
+      const PAD = 84;
+
+      try {
+        const logo = await new Promise((res, rej) => { const im = new Image(); im.crossOrigin = "anonymous"; im.onload = () => res(im); im.onerror = rej; im.src = "/logo.png"; });
+        ctx.drawImage(logo, PAD, 96, 76, 76);
+      } catch { /* skip logo if it fails to load */ }
+      ctx.font = "600 42px Fredoka"; ctx.fillStyle = "#FFFFFF"; ctx.textAlign = "left";
+      ctx.fillText("Quandary", PAD + 92, 148);
+
+      const f = FLAIRS[q.flair];
+      ctx.font = "800 26px \'Plus Jakarta Sans\'";
+      const pillLabel = f.label.toUpperCase();
+      const pillW = ctx.measureText(pillLabel).width + 48;
+      ctx.fillStyle = "rgba(255,255,255,0.16)";
+      ctx.beginPath(); ctx.roundRect(PAD, 236, pillW, 56, 28); ctx.fill();
+      ctx.fillStyle = "#FFFFFF"; ctx.textAlign = "left";
+      ctx.fillText(pillLabel, PAD + 24, 273);
+
+      let y = wrap(q.title, PAD, 400, W - PAD * 2, 66, "600 58px Fredoka", "#FFFFFF");
+
+      const opts = q.options || [];
+      const totalV = totalVotes(q) || 1;
+      let barY = Math.max(y + 60, 620);
+      const barW = W - PAD * 2, barH = 128, gap = 34;
+
+      opts.forEach((o) => {
+        const pct = Math.round((o.voters.length / totalV) * 100);
+        const mine = o.id === myOptId;
+
+        ctx.fillStyle = "rgba(255,255,255,0.14)";
+        ctx.beginPath(); ctx.roundRect(PAD, barY, barW, barH, 26); ctx.fill();
+        ctx.fillStyle = mine ? "#FFFFFF" : "rgba(255,255,255,0.38)";
+        const fillW = Math.max((barW * pct) / 100, 26);
+        ctx.beginPath(); ctx.roundRect(PAD, barY, fillW, barH, 26); ctx.fill();
+
+        ctx.font = "700 38px \'Plus Jakarta Sans\'";
+        ctx.fillStyle = mine ? "#5B3FE0" : "#FFFFFF";
+        ctx.textAlign = "left";
+        const label = (mine ? "\u2713 " : "") + o.text;
+        const maxTextW = barW - 170;
+        let clipped = label;
+        while (ctx.measureText(clipped).width > maxTextW && clipped.length > 3) clipped = clipped.slice(0, -2);
+        if (clipped !== label) clipped += "\u2026";
+        ctx.fillText(clipped, PAD + 32, barY + 80);
+
+        ctx.font = "700 40px \'Plus Jakarta Sans\'";
+        ctx.textAlign = "right";
+        ctx.fillStyle = mine ? "#5B3FE0" : "#FFFFFF";
+        ctx.fillText(`${pct}%`, PAD + barW - 32, barY + 80);
+
+        barY += barH + gap;
+      });
+
+      ctx.font = "600 32px \'Plus Jakarta Sans\'"; ctx.fillStyle = "rgba(255,255,255,0.85)"; ctx.textAlign = "left";
+      ctx.fillText(`${totalV} ${totalV === 1 ? "vote" : "votes"} so far`, PAD, barY + 20);
+
+      const footY = H - 210;
+      ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(PAD, footY); ctx.lineTo(W - PAD, footY); ctx.stroke();
+
+      ctx.font = "700 46px Fredoka"; ctx.fillStyle = "#FFFFFF"; ctx.textAlign = "left";
+      ctx.fillText("quandary.live", PAD, footY + 76);
+      ctx.font = "600 28px \'Plus Jakarta Sans\'"; ctx.fillStyle = "rgba(255,255,255,0.8)";
+      ctx.fillText("Every hypothetical deserves an answer.", PAD, footY + 118);
+      ctx.font = "600 26px \'Plus Jakarta Sans\'"; ctx.fillStyle = "rgba(255,255,255,0.7)"; ctx.textAlign = "right";
+      ctx.fillText("@quandary.live", W - PAD, footY + 76);
+      ctx.font = "500 22px \'Plus Jakarta Sans\'"; ctx.fillStyle = "rgba(255,255,255,0.55)";
+      ctx.fillText("IG & TikTok", W - PAD, footY + 108);
+
+      const blob = await new Promise((res) => canvas.toBlob(res, "image/png", 0.95));
+      const file = new File([blob], "quandary-result.png", { type: "image/png" });
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: "Quandary", text: q.title });
+        track("results_card_shared", { method: "share" });
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = "quandary-result.png"; a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        flash("Image downloaded -- share it anywhere");
+        track("results_card_shared", { method: "download" });
+      }
+    } catch (e) { flash("Couldn\'t create the image -- try again."); }
+  };
+
   const shareQuestion = async (q) => {
     const url = `${window.location.origin}/q/${q.id}`;
     try {
@@ -662,7 +788,7 @@ export default function Quandary() {
             onAskClarif={askClarif} onAnswerClarif={answerClarif}
             onEdit={editQuestion} onDelete={deleteQuestion} onOpenUser={openUser}
             isAdmin={isAdmin} onToggleHidden={toggleHidden} onDeleteReply={deleteReply}
-            onEditClarif={editClarif} onToggleClarifHidden={toggleClarifHidden} onDeleteClarif={deleteClarif} onShare={shareQuestion} onReact={react} />
+            onEditClarif={editClarif} onToggleClarifHidden={toggleClarifHidden} onDeleteClarif={deleteClarif} onShare={shareQuestion} onReact={react} onShareCard={shareResultsCard} />
         )}
         {searchOpen && <SearchOverlay questions={questions} onClose={() => setSearchOpen(false)} onOpen={(id) => { setSearchOpen(false); setOpen(id); }} />}
         {viewUser && (
@@ -878,7 +1004,7 @@ function Card({ q, me, saved, isFollowing, onOpen, onSave, onFollow, onUser }) {
 }
 
 /* ---------- DETAIL ---------- */
-function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onReport, onSave, onFollow, onAskClarif, onAnswerClarif, onEdit, onDelete, onOpenUser, isAdmin, onToggleHidden, onDeleteReply, onEditClarif, onToggleClarifHidden, onDeleteClarif, onShare, onReact }) {
+function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onReport, onSave, onFollow, onAskClarif, onAnswerClarif, onEdit, onDelete, onOpenUser, isAdmin, onToggleHidden, onDeleteReply, onEditClarif, onToggleClarifHidden, onDeleteClarif, onShare, onReact, onShareCard }) {
   const f = FLAIRS[q.flair]; const Icon = f.icon; const author = userById(q.authorId);
   const isAuthor = q.authorId === me;
   const [editing, setEditing] = useState(false);
@@ -985,6 +1111,11 @@ function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onR
                 );
               })}
               <div className="pollmeta">{revealed ? `${votes} ${votes === 1 ? "vote" : "votes"}${isAuthor && !hasVoted ? " · asker's preview — you can still vote" : ""}` : "Tap to weigh in"}{q.anon ? " · answers are anonymous" : ""}</div>
+              {revealed && (
+                <button className="cardsharebtn" onClick={() => onShareCard(q, myVote ? myVote.id : null)}>
+                  <ImageIcon size={15} /> Share my result
+                </button>
+              )}
             </div>
           )}
 
@@ -1822,6 +1953,7 @@ button.name.as-btn:hover{color:var(--purple);}
 .clar-hiddentag{margin-right:auto; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; color:#9A6B00; background:#FFF6E6; padding:2px 8px; border-radius:999px;}
 .clar.isHidden .clar-q, .clar.isHidden .clar-a{opacity:.5;}
 
+.cardsharebtn{display:inline-flex; align-items:center; gap:7px; background:linear-gradient(95deg,#6C4DFF,#9B6BFF); color:#fff; border:none; border-radius:999px; padding:9px 16px; font-weight:700; font-size:13px; cursor:pointer; font-family:var(--body); margin:2px 2px 4px;}
 .reactbar{display:flex; gap:6px; margin-top:8px; flex-wrap:wrap;}
 .reactchip{display:inline-flex; align-items:center; gap:4px; background:var(--lav); border:1.5px solid var(--line); border-radius:999px; padding:3px 9px; cursor:pointer; font-family:var(--body); line-height:1;}
 .reactchip:hover{border-color:#C9C9DC;}
