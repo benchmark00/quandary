@@ -979,7 +979,7 @@ function Card({ q, me, saved, isFollowing, onOpen, onSave, onFollow, onUser }) {
     <article className="card" onClick={onOpen} style={{ "--accent": f.tint }}>
       <div className="card-top">
         <button className="byline as-btn" onClick={(e) => { e.stopPropagation(); onUser && onUser(q.authorId); }}>
-          <Avatar id={q.authorId} />
+          <Avatar id={q.authorId} size={38} />
           <div className="byline-txt"><span className="name">{author.name}</span><span className="meta">@{author.handle} · {ago(q.ts)}</span></div>
         </button>
         {q.authorId !== me && (

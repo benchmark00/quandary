@@ -101,7 +101,11 @@ function Auth({ onDismiss }) {
           <h1 className="auth-title">One tap to go!</h1>
           <p className="auth-sub">We've sent a confirmation link to</p>
           <p className="auth-email">{awaiting}</p>
-          <p className="auth-copy">Tap the link in that email and the hypotheticals await. Every hypothetical deserves an answer — including "did my email arrive?" (Check spam if it's hiding.)</p>
+          <p className="auth-copy">Tap the link in that email and the hypotheticals await. Every hypothetical deserves an answer — including "did my email arrive?"</p>
+          <div className="auth-spam">
+            <b>📁 Can't see it? Check your junk or spam folder.</b>
+            <span>New senders often land there. Mark it "not spam" and you'll get future Quandary emails in your inbox.</span>
+          </div>
           <button className="auth-btn" onClick={() => { setAwaiting(null); setMode("login"); setError(""); setNote(""); }}>
             I've confirmed — log me in
           </button>
@@ -331,7 +335,10 @@ function AuthStyle() {
 .auth-logo{margin-bottom:14px;}
 .auth-mail{font-size:52px; margin-bottom:10px;}
 .auth-email{font-weight:800; color:#6C4DFF; font-size:16px; margin:2px 0 14px; word-break:break-all;}
-.auth-copy{color:#6E6E86; font-size:14px; line-height:1.55; margin:0 0 20px;}
+.auth-copy{color:#6E6E86; font-size:14px; line-height:1.55; margin:0 0 16px;}
+.auth-spam{display:flex; flex-direction:column; gap:5px; background:#FFF6E6; border:1px solid #FFE2A8; border-radius:14px; padding:14px 16px; margin:0 0 20px; text-align:left;}
+.auth-spam b{color:#8A5A00; font-size:14px;}
+.auth-spam span{color:#9A6B00; font-size:12.5px; line-height:1.5;}
 .auth-title{font-family:'Fredoka',system-ui,sans-serif; font-weight:700; font-size:26px; color:#0D0F1A; margin:0 0 2px;}
 .auth-sub{color:#6E6E86; font-size:14px; margin:0 0 22px;}
 .auth-in{width:100%; box-sizing:border-box; background:#F2F3FF; border:1.5px solid #E7E7F3; border-radius:12px;
