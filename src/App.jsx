@@ -4,7 +4,7 @@ import {
   MessageCircle, Star, Flag, Search, ChevronLeft, Check, HelpCircle,
   UserPlus, UserCheck, Send, X, Split, Droplet, Tent, ThumbsDown, Plus, Trash2,
   Share, ArrowRight, Crown, Pencil, Eye, EyeOff, Shield, RefreshCw, Camera,
-  Image as ImageIcon,
+  Image as ImageIcon, Globe,
 } from "lucide-react";
 import { supabase } from "./lib/supabase.js";
 import { enablePush, pushSupported, isStandalone } from "./lib/push.js";
@@ -247,7 +247,7 @@ export default function Quandary() {
 
       const [{ data: profiles }, { data: baseQs }] = await Promise.all([
         supabase.from("profiles").select("id, name, handle, color, onboarded, is_admin, needs_handle, created_at, avatar_url"),
-        supabase.from("questions").select("id, author_id, flair, format, title, body, anonymous, anonymous_replies, hidden, created_at"),
+        supabase.from("questions").select("id, author_id, flair, format, title, body, anonymous, anonymous_replies, hidden, exclude_seo, slug, created_at"),
       ]);
       (profiles || []).forEach((p) => { PROFILES[p.id] = p; });
       const myProfile = (profiles || []).find((p) => p.id === user.id);
@@ -316,7 +316,7 @@ export default function Quandary() {
           .map((c) => ({ id: c.id, userId: c.asker_id, text: c.body, ts: Date.parse(c.created_at), hidden: c.hidden,
             answer: c.answer_body ? { text: c.answer_body, ts: Date.parse(c.answered_at || c.created_at) } : null }));
         const rts = {}; (ratG[q.id] || []).forEach((r) => { rts[r.rater_id] = r.stars; });
-        return { id: q.id, authorId: q.author_id, flair: q.flair, format: q.format, anon: q.anonymous, anonReplies: q.anonymous_replies, hidden: q.hidden,
+        return { id: q.id, authorId: q.author_id, flair: q.flair, format: q.format, anon: q.anonymous, anonReplies: q.anonymous_replies, hidden: q.hidden, excludeSeo: q.exclude_seo, slug: q.slug,
           title: q.title, body: q.body || "", options, replies: reps, clarifs: clars, ratings: rts, reported: false, ts: Date.parse(q.created_at) };
       });
 
@@ -648,6 +648,13 @@ export default function Quandary() {
       await loadAll(); flash("Question updated");
     } catch (e) { flash(e.message); }
   };
+  const toggleSeo = async (qId, exclude) => {
+    try {
+      const { error } = await supabase.from("questions").update({ exclude_seo: exclude }).eq("id", qId);
+      if (error) throw error;
+      await loadAll(); flash(exclude ? "Excluded from public/search pages" : "Included on public/search pages");
+    } catch (e) { flash(e.message); }
+  };
   const toggleHidden = async (qId, hide) => {
     try {
       const { error } = await supabase.from("questions").update({ hidden: hide }).eq("id", qId);
@@ -787,7 +794,7 @@ export default function Quandary() {
             onVote={vote} onRate={rate} onReply={reply} onReport={report} onSave={toggleSave} onFollow={toggleFollow}
             onAskClarif={askClarif} onAnswerClarif={answerClarif}
             onEdit={editQuestion} onDelete={deleteQuestion} onOpenUser={openUser}
-            isAdmin={isAdmin} onToggleHidden={toggleHidden} onDeleteReply={deleteReply}
+            isAdmin={isAdmin} onToggleHidden={toggleHidden} onToggleSeo={toggleSeo} onDeleteReply={deleteReply}
             onEditClarif={editClarif} onToggleClarifHidden={toggleClarifHidden} onDeleteClarif={deleteClarif} onShare={shareQuestion} onReact={react} onShareCard={shareResultsCard} />
         )}
         {searchOpen && <SearchOverlay questions={questions} onClose={() => setSearchOpen(false)} onOpen={(id) => { setSearchOpen(false); setOpen(id); }} />}
@@ -1004,7 +1011,7 @@ function Card({ q, me, saved, isFollowing, onOpen, onSave, onFollow, onUser }) {
 }
 
 /* ---------- DETAIL ---------- */
-function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onReport, onSave, onFollow, onAskClarif, onAnswerClarif, onEdit, onDelete, onOpenUser, isAdmin, onToggleHidden, onDeleteReply, onEditClarif, onToggleClarifHidden, onDeleteClarif, onShare, onReact, onShareCard }) {
+function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onReport, onSave, onFollow, onAskClarif, onAnswerClarif, onEdit, onDelete, onOpenUser, isAdmin, onToggleHidden, onToggleSeo, onDeleteReply, onEditClarif, onToggleClarifHidden, onDeleteClarif, onShare, onReact, onShareCard }) {
   const f = FLAIRS[q.flair]; const Icon = f.icon; const author = userById(q.authorId);
   const isAuthor = q.authorId === me;
   const [editing, setEditing] = useState(false);
@@ -1039,6 +1046,12 @@ function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onR
                 <button className="iconbtn" onClick={() => onToggleHidden(q.id, !q.hidden)}
                   aria-label={q.hidden ? "Restore" : "Hide"} title={q.hidden ? "Restore to feed" : "Hide from feed"}>
                   {q.hidden ? <Eye size={17} /> : <EyeOff size={17} />}
+                </button>
+              )}
+              {isAdmin && (
+                <button className={"iconbtn" + (q.excludeSeo ? " on" : "")} onClick={() => onToggleSeo(q.id, !q.excludeSeo)}
+                  aria-label="Toggle public/SEO" title={q.excludeSeo ? "Excluded from public pages — tap to include" : "Public on the web — tap to exclude"}>
+                  {q.excludeSeo ? <EyeOff size={17} /> : <Globe size={17} />}
                 </button>
               )}
               <button className="iconbtn" onClick={() => { setTDraft(q.title); setBDraft(q.body); setEditing(true); }} aria-label="Edit" title="Edit"><Pencil size={17} /></button>
