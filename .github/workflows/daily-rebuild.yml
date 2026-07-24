@@ -1,0 +1,26 @@
+# Rebuilds the site once a day so the prerendered SEO pages pick up fresh
+# vote counts and any new public questions — without you pushing anything.
+#
+# HOW IT WORKS: this scheduled job calls a Netlify "build hook" (a secret URL
+# that triggers a deploy). You create that hook in Netlify and store its URL as
+# a GitHub secret named NETLIFY_BUILD_HOOK (steps in the guide).
+name: Daily SEO rebuild
+
+on:
+  schedule:
+    # 06:15 UTC every day. GitHub cron uses UTC. Change if you like.
+    - cron: "15 6 * * *"
+  workflow_dispatch: {}   # also lets you trigger it manually from the Actions tab
+
+jobs:
+  trigger-netlify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Netlify build
+        run: |
+          if [ -z "${{ secrets.NETLIFY_BUILD_HOOK }}" ]; then
+            echo "NETLIFY_BUILD_HOOK secret is not set — see SEO_PHASE2C_GUIDE.md"
+            exit 1
+          fi
+          curl -fsSL -X POST -d '{}' "${{ secrets.NETLIFY_BUILD_HOOK }}"
+          echo "Triggered a Netlify rebuild."
