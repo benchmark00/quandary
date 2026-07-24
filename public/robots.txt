@@ -1,0 +1,8 @@
+# Quandary — robots.txt
+User-agent: *
+Allow: /
+
+# Keep crawlers out of app-internal routes that have no standalone SEO value
+Disallow: /q/
+
+Sitemap: https://www.quandary.live/sitemap.xml

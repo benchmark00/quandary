@@ -122,8 +122,8 @@ select cron.schedule(
     url     := 'https://gyotdxrgcqbemefelnga.supabase.co/functions/v1/send-comeback-emails',
     headers := jsonb_build_object(
                  'Content-Type', 'application/json',
-                 'Authorization', 'Bearer PASTE_YOUR_ANON_KEY_HERE',
-                 'x-cron-secret', 'PASTE_CRON_SECRET_HERE'
+                 'Authorization', 'Bearer sb_publishable_n3M80jkubv4N6hCZtGKgTg_0S5SV3p9',
+                 'x-cron-secret', '248f4081d35c17c1177ec81e46fb27fd59d8c00a7eede6a4'
                ),
     body    := '{}'::jsonb
   );
