@@ -4,11 +4,12 @@ import {
   MessageCircle, Star, Flag, Search, ChevronLeft, Check, HelpCircle,
   UserPlus, UserCheck, Send, X, Split, Droplet, Tent, ThumbsDown, Plus, Trash2,
   Share, ArrowRight, Crown, Pencil, Eye, EyeOff, Shield, RefreshCw, Camera,
-  Image as ImageIcon, Globe,
+  Image as ImageIcon, Globe, Smartphone, Sun, Moon,
 } from "lucide-react";
 import { supabase } from "./lib/supabase.js";
 import { enablePush, pushSupported, isStandalone } from "./lib/push.js";
 import { identifyUser, track } from "./lib/analytics.js";
+import { getThemePref, setThemePref } from "./lib/theme.js";
 
 /* ================================================================== *
  *  QUANDARY  —  Every hypothetical deserves an answer.
@@ -1387,6 +1388,29 @@ function Alerts({ activity, prefs, updatePrefs, onOpen, onUser }) {
   );
 }
 
+/* ---------- APPEARANCE (night mode) ---------- */
+function ThemeToggle() {
+  const [pref, setPref] = useState(() => getThemePref());
+  const pick = (p) => { setThemePref(p); setPref(p); };
+  const OPTIONS = [
+    { key: "system", label: "System", icon: <Smartphone size={15} /> },
+    { key: "light", label: "Light", icon: <Sun size={15} /> },
+    { key: "dark", label: "Dark", icon: <Moon size={15} /> },
+  ];
+  return (
+    <div className="prefbox">
+      <div className="prefhead"><Moon size={16} /> Appearance</div>
+      <div className="themerow">
+        {OPTIONS.map((o) => (
+          <button key={o.key} className={"themebtn" + (pref === o.key ? " on" : "")} onClick={() => pick(o.key)}>
+            {o.icon}<span>{o.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ---------- PROFILE ---------- */
 function Profile({ me, questions, following, followerCount = 0, onFollow, onOpen, onUser, replay, onAvatar, onInvite }) {
   const fileRef = useRef(null);
@@ -1429,6 +1453,7 @@ function Profile({ me, questions, following, followerCount = 0, onFollow, onOpen
           </p>
         </div>
       )}
+      <ThemeToggle />
       <button className="invitebox" onClick={onInvite}>
         <div className="invite-txt">
           <b>Know someone with strong opinions?</b>
@@ -1707,6 +1732,33 @@ function Style() {
   display:flex; justify-content:center; align-items:flex-start; min-height:100vh;
   background:linear-gradient(180deg,#EDEBFF 0%, #F4F2FF 40%, #FCFBFF 100%); font-family:var(--body);
 }
+/* ---------- night mode ----------
+   Re-defining the same custom properties is enough for the vast majority of
+   the app, since cards/sheets/inputs/text all already read from these vars.
+   A handful of status-tint callouts (success/warning/error) use their own
+   literal colors for a recognizable hue in light mode, so those get explicit
+   dark equivalents below too. */
+html[data-theme="dark"] .q-root{
+  --ink:#EDEDF4; --purple:#9B84FF; --pink:#FF6FC4; --orange:#FFB255;
+  --yellow:#FFE070; --teal:#4BE9D6; --lav:#15151E; --white:#1E1E29;
+  --muted:#9797AC; --line:#33333F; --surface:#1E1E29;
+  background:linear-gradient(180deg,#101018 0%, #131320 45%, #16161F 100%);
+}
+html[data-theme="dark"] .phone{ box-shadow:0 24px 80px rgba(0,0,0,.5); }
+@media(min-width:480px){ html[data-theme="dark"] .phone{ border-color:var(--line); } }
+
+html[data-theme="dark"] .push-on{ background:#0E2A24; color:#4FE0BE; }
+html[data-theme="dark"] .push-hint{ background:#2E2408; color:#F0C060; }
+html[data-theme="dark"] .confirmbar{ background:#2E1420; color:#FF7FAE; }
+html[data-theme="dark"] .hiddenbar{ background:#2E2408; color:#F0C060; }
+html[data-theme="dark"] .handle-err{ background:#2E1420; color:#FF7FAE; }
+html[data-theme="dark"] .repbtn{ background:#2E1420; color:#FF7FAE; }
+html[data-theme="dark"] .restore{ background:#0E2A24; color:#4FE0BE; }
+html[data-theme="dark"] .clar-hiddentag{ background:#2E2408; color:#F0C060; }
+html[data-theme="dark"] .booterr{ background:#2E1420; color:#FF7FAE; }
+html[data-theme="dark"] .streakcard{ background:linear-gradient(95deg,#2E2408,#3A2A0A); border-color:#4A3A10; }
+html[data-theme="dark"] .streak-row{ color:#F0C060; }
+html[data-theme="dark"] .streak-recap{ color:#D4A94E; }
 /* Lock the page itself so only the feed scrolls — keeps the tab bar pinned,
    including in iOS Safari where the browser toolbar collapses. */
 html, body{height:100%; margin:0; overflow:hidden; overscroll-behavior:none;}
@@ -1884,6 +1936,9 @@ html, body{height:100%; margin:0; overflow:hidden; overscroll-behavior:none;}
 .profhead{display:flex; align-items:center; gap:16px; margin-bottom:18px;}
 .profname{font-family:var(--disp); font-weight:700; font-size:23px;}
 .profstats{display:flex; gap:8px; margin-bottom:6px;}
+.themerow{display:flex; gap:8px;}
+.themebtn{flex:1; display:flex; flex-direction:column; align-items:center; gap:5px; background:var(--lav); border:1.5px solid var(--line); color:var(--muted); padding:12px 8px; border-radius:14px; font-weight:700; font-size:12.5px; cursor:pointer; font-family:var(--body);}
+.themebtn.on{background:var(--purple); border-color:var(--purple); color:#fff;}
 .streakcard{background:linear-gradient(95deg,#FFF3E0,#FFE8D6); border:1px solid #FFD9B0; border-radius:16px; padding:14px 16px; margin:2px 0 14px;}
 .streak-row{display:flex; align-items:center; gap:8px; font-size:14.5px; font-weight:700; color:#8a4a00; margin-bottom:4px;}
 .streak-flame{font-size:19px; line-height:1;}

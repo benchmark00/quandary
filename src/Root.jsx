@@ -370,6 +370,39 @@ function AuthStyle() {
 .auth-note{background:#E9FBF6; color:#0C8C73; border-radius:10px; padding:10px 12px; font-size:13px; margin-bottom:11px; text-align:left;}
 .dev-signout{position:fixed; top:12px; right:12px; z-index:999; background:#0D0F1A; color:#fff; border:none;
   border-radius:999px; padding:8px 14px; font-size:12.5px; font-weight:600; cursor:pointer; font-family:system-ui; opacity:.8;}
+
+/* ---------- night mode ----------
+   These screens (auth + landing) render before login, so they use their own
+   literal colors rather than App.jsx's CSS variables — each gets an explicit
+   dark equivalent here, keyed off the data-theme attribute set on <html>
+   before first paint (see src/lib/theme.js). */
+html[data-theme="dark"] .auth-wrap{ background:linear-gradient(180deg,#101018 0%,#131320 60%,#16161F 100%); }
+html[data-theme="dark"] .auth-card{ background:#1E1E29; border-color:#33333F; box-shadow:0 24px 70px rgba(0,0,0,.5); }
+html[data-theme="dark"] .auth-x{ background:#15151E; color:#9797AC; }
+html[data-theme="dark"] .auth-x:hover{ color:#EDEDF4; }
+html[data-theme="dark"] .land-wrap{ background:linear-gradient(180deg,#101018 0%,#131320 55%,#16161F 100%); }
+html[data-theme="dark"] .land-head{ background:rgba(21,21,30,.92); border-bottom-color:#33333F; }
+html[data-theme="dark"] .land-tag,.land-note,.land-meta,.land-body,.land-foot{ color:#9797AC; }
+html[data-theme="dark"] .land-card{ background:#1E1E29; border-color:#33333F; box-shadow:0 2px 12px rgba(0,0,0,.25); }
+html[data-theme="dark"] .land-name,.land-title{ color:#EDEDF4; }
+html[data-theme="dark"] .land-foot{ border-top-color:#33333F; }
+html[data-theme="dark"] .land-ov{ background:rgba(0,0,0,.55); }
+html[data-theme="dark"] .auth-email{ color:#9B84FF; }
+html[data-theme="dark"] .auth-copy,.auth-sub,.auth-forgot,.auth-div{ color:#9797AC; }
+html[data-theme="dark"] .auth-spam{ background:#2E2408; border-color:#4A3A10; }
+html[data-theme="dark"] .auth-spam b{ color:#F0C060; }
+html[data-theme="dark"] .auth-spam span{ color:#D4A94E; }
+html[data-theme="dark"] .auth-title{ color:#EDEDF4; }
+html[data-theme="dark"] .auth-in{ background:#15151E; border-color:#33333F; color:#EDEDF4; }
+html[data-theme="dark"] .auth-in:focus{ border-color:#9B84FF; background:#1E1E29; }
+html[data-theme="dark"] .auth-div:before,html[data-theme="dark"] .auth-div:after{ background:#33333F; }
+html[data-theme="dark"] .auth-google{ background:#1E1E29; border-color:#33333F; color:#EDEDF4; }
+html[data-theme="dark"] .auth-google:hover{ border-color:#4A4A5A; }
+html[data-theme="dark"] .land-footer{ color:#6E6E86; }
+html[data-theme="dark"] .auth-legal{ color:#6E6E86; }
+html[data-theme="dark"] .auth-legal a{ color:#9797AC; }
+html[data-theme="dark"] .auth-err{ background:#2E1420; color:#FF7FAE; }
+html[data-theme="dark"] .auth-note{ background:#0E2A24; color:#4FE0BE; }
 `}</style>
   );
 }
