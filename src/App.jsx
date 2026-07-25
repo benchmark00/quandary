@@ -1970,6 +1970,7 @@ html[data-theme="dark"] .wm-swap .wm-dark{display:inline-block;}
 
 /* tabbar */
 .tabbar{position:absolute; bottom:0; left:0; right:0; display:flex; background:rgba(255,255,255,.94); backdrop-filter:blur(12px); border-top:1px solid var(--line); padding:8px 0 max(12px, env(safe-area-inset-bottom));}
+html[data-theme="dark"] .tabbar{ background:rgba(30,30,41,.94); }
 .tabbtn{flex:1; background:none; border:none; color:var(--muted); display:flex; flex-direction:column; align-items:center; gap:3px; cursor:pointer; font-size:10.5px; font-weight:600; font-family:var(--body);}
 .tabbtn.active{color:var(--purple);}
 
