@@ -151,9 +151,16 @@ function Logo({ size = 40, sparks = true }) {
 }
 function Wordmark({ size = 28 }) {
   // size ≈ the old text height; the image is sized to occupy the same slot.
+  // Two images, CSS toggles which is visible — the dark variant has the
+  // navy "uandary" lettering recolored white while the purple Q and sparks
+  // stay exactly as designed. See public/wordmark-dark.png.
   return (
-    <img src="/wordmark.png" alt="Quandary" className="wordmark-img"
-      style={{ height: size * 1.45 }} draggable={false} />
+    <span className="wm-swap" style={{ height: size * 1.45 }}>
+      <img src="/wordmark.png" alt="Quandary" className="wordmark-img wm-light"
+        style={{ height: size * 1.45 }} draggable={false} />
+      <img src="/wordmark-dark.png" alt="Quandary" className="wordmark-img wm-dark"
+        style={{ height: size * 1.45 }} draggable={false} />
+    </span>
   );
 }
 
@@ -1776,6 +1783,10 @@ html, body{height:100%; margin:0; overflow:hidden; overscroll-behavior:none;}
 .wm-text{margin-left:-0.18em; transform:translateY(.02em);}
 .wordmark-img{display:block; width:auto; user-select:none;}
 .logo-img{display:block; object-fit:contain; user-select:none;}
+.wm-swap{display:inline-block; line-height:0;}
+.wm-swap .wm-dark{display:none;}
+html[data-theme="dark"] .wm-swap .wm-light{display:none;}
+html[data-theme="dark"] .wm-swap .wm-dark{display:inline-block;}
 
 .topbar{display:flex; align-items:center; justify-content:space-between; padding:16px 18px 8px;}
 .iconbtn{background:none; border:none; color:var(--ink); padding:7px; cursor:pointer; border-radius:11px; display:grid; place-items:center;}

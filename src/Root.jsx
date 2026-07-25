@@ -260,7 +260,10 @@ function Landing() {
     <div className="land-wrap">
       <AuthStyle />
       <header className="land-head">
-        <img src="/wordmark.png" alt="Quandary" className="land-logo" draggable={false} />
+        <span className="wm-swap">
+          <img src="/wordmark.png" alt="Quandary" className="land-logo wm-light" draggable={false} />
+          <img src="/wordmark-dark.png" alt="Quandary" className="land-logo wm-dark" draggable={false} />
+        </span>
         {!showAuth && <button className="land-cta" onClick={() => setShowAuth(true)}>Sign Up</button>}
       </header>
       <p className="land-tag">Every hypothetical deserves an answer.</p>
@@ -323,6 +326,10 @@ function AuthStyle() {
 .land-wrap{min-height:100vh; background:linear-gradient(180deg,#EDEBFF 0%,#F7F5FF 55%,#FFFFFF 100%); font-family:'Plus Jakarta Sans',system-ui,sans-serif; padding-bottom:40px;}
 .land-head{position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between; padding:14px 18px; background:rgba(242,243,255,.92); backdrop-filter:blur(10px); border-bottom:1px solid #E7E7F3;}
 .land-logo{height:34px; width:auto; display:block;}
+.wm-swap{display:inline-block; line-height:0;}
+.wm-swap .wm-dark{display:none;}
+html[data-theme="dark"] .wm-swap .wm-light{display:none;}
+html[data-theme="dark"] .wm-swap .wm-dark{display:inline-block;}
 .land-cta{background:linear-gradient(95deg,#6C4DFF,#9B6BFF); color:#fff; border:none; padding:10px 22px; border-radius:999px; font-family:'Fredoka',system-ui,sans-serif; font-weight:600; font-size:15px; cursor:pointer; box-shadow:0 8px 20px rgba(108,77,255,.3);}
 .land-tag{text-align:center; color:#6E6E86; font-size:14px; margin:14px 16px 6px;}
 .land-feed{max-width:430px; margin:0 auto; padding:10px 16px; cursor:pointer;}
