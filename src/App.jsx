@@ -1992,7 +1992,8 @@ html[data-theme="dark"] .tabbar{ background:rgba(30,30,41,.94); }
 .tabbtn{flex:1; background:none; border:none; color:var(--muted); display:flex; flex-direction:column; align-items:center; gap:3px; cursor:pointer; font-size:10.5px; font-weight:600; font-family:var(--body);}
 .tabbtn.active{color:var(--purple);}
 
-.toast{position:absolute; bottom:88px; left:50%; transform:translateX(-50%); background:var(--ink); color:#fff; padding:11px 18px; border-radius:999px; font-size:13.5px; font-weight:600; box-shadow:0 12px 34px rgba(13,15,26,.3); z-index:60; animation:rise .2s ease; max-width:88%; text-align:center;}
+.toast{position:absolute; bottom:88px; left:50%; transform:translateX(-50%); background:#0D0F1A; color:#fff; padding:11px 18px; border-radius:999px; font-size:13.5px; font-weight:600; box-shadow:0 12px 34px rgba(13,15,26,.3); z-index:60; animation:rise .2s ease; max-width:88%; text-align:center;}
+html[data-theme="dark"] .toast{ background:#EDEDF4; color:#0D0F1A; box-shadow:0 12px 34px rgba(0,0,0,.5); }
 
 /* search */
 .search-ov{position:absolute; inset:0; background:var(--lav); z-index:55; display:flex; flex-direction:column; animation:fade .15s ease;}
