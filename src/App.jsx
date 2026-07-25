@@ -217,7 +217,7 @@ export default function Quandary() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [toast, setToast] = useState(null);
   const [activity, setActivity] = useState([]);
-  const [prefs, setPrefs] = useState({ every: false, followed: true, cats: new Set() });
+  const [prefs, setPrefs] = useState({ every: false, followed: true, cats: new Set(), notifReplies: true, notifClarifs: true });
   const [me, setMe] = useState(null);
   const [qotdId, setQotdId] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -276,7 +276,7 @@ export default function Quandary() {
         supabase.from("saves").select("question_id").eq("user_id", user.id),
         supabase.from("follows").select("follower_id").eq("followee_id", user.id),
         supabase.from("notifications").select("id, actor_id, type, question_id, created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(40),
-        supabase.from("notification_prefs").select("every_question, followed_only, categories").eq("user_id", user.id).maybeSingle(),
+        supabase.from("notification_prefs").select("every_question, followed_only, categories, notify_replies, notify_clarifs").eq("user_id", user.id).maybeSingle(),
         supabase.rpc("get_qotd"),
         supabase.from("reactions").select("reply_id, user_id, emoji"),
       ]);
@@ -333,7 +333,7 @@ export default function Quandary() {
       setSaved(new Set((mySaves.data || []).map((s) => s.question_id)));
       setFollowerCount((myFollowers.data || []).length);
       setActivity((notifs.data || []).map((n) => ({ id: n.id, userId: n.actor_id, type: n.type, qId: n.question_id, ts: Date.parse(n.created_at) })));
-      if (myPrefs.data) setPrefs({ every: !!myPrefs.data.every_question, followed: !!myPrefs.data.followed_only, cats: new Set(myPrefs.data.categories || []) });
+      if (myPrefs.data) setPrefs({ every: !!myPrefs.data.every_question, followed: !!myPrefs.data.followed_only, cats: new Set(myPrefs.data.categories || []), notifReplies: myPrefs.data.notify_replies !== false, notifClarifs: myPrefs.data.notify_clarifs !== false });
       setQotdId(qotdRes && qotdRes.data ? qotdRes.data : null);
       setLoading(false);
     } catch (e) {
@@ -410,6 +410,8 @@ export default function Quandary() {
         every_question: next.every,
         followed_only: next.followed,
         categories: [...next.cats],
+        notify_replies: next.notifReplies,
+        notify_clarifs: next.notifClarifs,
         updated_at: new Date().toISOString(),
       }).eq("user_id", me);
       if (error) throw error;
@@ -1367,6 +1369,12 @@ function Alerts({ activity, prefs, updatePrefs, onOpen, onUser }) {
         <div className="prefsub">By category</div>
         <div className="chiprow wrap">{Object.keys(FLAIRS).map((k) => <FlairChip key={k} k={k} active={prefs.cats.has(k)} onClick={() => setCat(k)} check />)}</div>
       </div>
+      <div className="prefbox">
+        <div className="prefhead"><MessageCircle size={16} /> When people engage with you</div>
+        <p className="prefnote">These are separate from new-question alerts above — turn either off without losing the other.</p>
+        <label className="prefrow"><input type="checkbox" checked={prefs.notifReplies} onChange={(e) => updatePrefs({ ...prefs, notifReplies: e.target.checked })} /><span>Replies to my questions</span></label>
+        <label className="prefrow"><input type="checkbox" checked={prefs.notifClarifs} onChange={(e) => updatePrefs({ ...prefs, notifClarifs: e.target.checked })} /><span>Clarifying questions (asked &amp; answered)</span></label>
+      </div>
       <div className="actfeed">
         <div className="prefsub">Recent activity</div>
         {activity.map((a) => (
@@ -1383,6 +1391,14 @@ function Alerts({ activity, prefs, updatePrefs, onOpen, onUser }) {
 function Profile({ me, questions, following, followerCount = 0, onFollow, onOpen, onUser, replay, onAvatar, onInvite }) {
   const fileRef = useRef(null);
   const mine = questions.filter((q) => q.authorId === me); const u = userById(me);
+  const [streak, setStreak] = useState(null);
+  useEffect(() => {
+    let live = true;
+    supabase.rpc("get_streak_stats", { uid: me }).then(({ data, error }) => {
+      if (live && !error && data && data[0]) setStreak(data[0]);
+    });
+    return () => { live = false; };
+  }, [me]);
   return (
     <div className="padtop">
       <div className="profhead">
@@ -1399,6 +1415,20 @@ function Profile({ me, questions, following, followerCount = 0, onFollow, onOpen
         <button className="as-stat" onClick={() => onUser && onUser(me, "followers")}><b>{followerCount}</b><span>followers</span></button>
         <button className="as-stat" onClick={() => onUser && onUser(me, "following")}><b>{following.size}</b><span>following</span></button>
       </div>
+      {streak && (streak.current_streak > 0 || streak.week_total > 0) && (
+        <div className="streakcard">
+          {streak.current_streak > 0 && (
+            <div className="streak-row">
+              <span className="streak-flame">🔥</span>
+              <span><b>{streak.current_streak}</b>-day streak — keep it going</span>
+            </div>
+          )}
+          <p className="streak-recap">
+            This week: <b>{streak.week_total}</b> {streak.week_total === 1 ? "quandary" : "quandaries"}
+            {" "}({streak.week_votes} voted, {streak.week_questions} asked, {streak.week_replies} replied)
+          </p>
+        </div>
+      )}
       <button className="invitebox" onClick={onInvite}>
         <div className="invite-txt">
           <b>Know someone with strong opinions?</b>
@@ -1854,6 +1884,10 @@ html, body{height:100%; margin:0; overflow:hidden; overscroll-behavior:none;}
 .profhead{display:flex; align-items:center; gap:16px; margin-bottom:18px;}
 .profname{font-family:var(--disp); font-weight:700; font-size:23px;}
 .profstats{display:flex; gap:8px; margin-bottom:6px;}
+.streakcard{background:linear-gradient(95deg,#FFF3E0,#FFE8D6); border:1px solid #FFD9B0; border-radius:16px; padding:14px 16px; margin:2px 0 14px;}
+.streak-row{display:flex; align-items:center; gap:8px; font-size:14.5px; font-weight:700; color:#8a4a00; margin-bottom:4px;}
+.streak-flame{font-size:19px; line-height:1;}
+.streak-recap{margin:0; font-size:13px; color:#8a5a1a;}
 .profstats>div{flex:1; background:var(--white); border:1px solid var(--line); border-radius:14px; padding:13px; text-align:center;}
 .profstats b{display:block; font-family:var(--disp); font-weight:600; font-size:21px;}
 .profstats span{font-size:12px; color:var(--muted);}

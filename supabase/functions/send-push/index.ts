@@ -32,6 +32,14 @@ const question = async (id: string) => {
   return data;
 };
 
+// Checks a single user's toggle for reply/clarification pushes. Defaults to
+// true (notify) if the row or column is somehow missing, so nobody silently
+// stops hearing from the app due to a data gap.
+const wantsNotif = async (userId: string, column: "notify_replies" | "notify_clarifs") => {
+  const { data } = await admin.from("notification_prefs").select(column).eq("user_id", userId).maybeSingle();
+  return data ? data[column] !== false : true;
+};
+
 async function sendToUsers(userIds: string[], payload: string) {
   if (userIds.length === 0) { console.log("no recipients"); return 0; }
   const { data: subs } = await admin
@@ -112,25 +120,31 @@ Deno.serve(async (req) => {
     } else if (type === "reply") {
       const q = await question(rec.question_id);
       if (q && q.author_id !== rec.author_id) {
-        const actor = q.anonymous_replies ? "Someone" : await name(rec.author_id);
-        sent = await sendToUsers([q.author_id],
-          payload(`${actor} replied to your question`, `"${q.title}" — ${rec.body}`.slice(0, 160), `/q/${q.id}`));
+        if (await wantsNotif(q.author_id, "notify_replies")) {
+          const actor = q.anonymous_replies ? "Someone" : await name(rec.author_id);
+          sent = await sendToUsers([q.author_id],
+            payload(`${actor} replied to your question`, `"${q.title}" — ${rec.body}`.slice(0, 160), `/q/${q.id}`));
+        } else console.log("recipient has reply notifications off — skipping");
       } else console.log("reply by the author themselves — skipping");
 
     } else if (type === "clarif") {
       const q = await question(rec.question_id);
       if (q && q.author_id !== rec.asker_id) {
-        const actor = await name(rec.asker_id);
-        sent = await sendToUsers([q.author_id],
-          payload(`${actor} asked for more context`, `On "${q.title}": ${rec.body}`.slice(0, 160), `/q/${q.id}`));
+        if (await wantsNotif(q.author_id, "notify_clarifs")) {
+          const actor = await name(rec.asker_id);
+          sent = await sendToUsers([q.author_id],
+            payload(`${actor} asked for more context`, `On "${q.title}": ${rec.body}`.slice(0, 160), `/q/${q.id}`));
+        } else console.log("recipient has clarification notifications off — skipping");
       }
 
     } else if (type === "clarif_answer") {
       const q = await question(rec.question_id);
       if (q && rec.asker_id !== q.author_id) {
-        const actor = await name(q.author_id);
-        sent = await sendToUsers([rec.asker_id],
-          payload(`${actor} answered your clarifying question`, `${rec.answer_body}`.slice(0, 160), `/q/${q.id}`));
+        if (await wantsNotif(rec.asker_id, "notify_clarifs")) {
+          const actor = await name(q.author_id);
+          sent = await sendToUsers([rec.asker_id],
+            payload(`${actor} answered your clarifying question`, `${rec.answer_body}`.slice(0, 160), `/q/${q.id}`));
+        } else console.log("recipient has clarification notifications off — skipping");
       }
     }
 
