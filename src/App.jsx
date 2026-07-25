@@ -10,6 +10,7 @@ import { supabase } from "./lib/supabase.js";
 import { enablePush, pushSupported, isStandalone } from "./lib/push.js";
 import { identifyUser, track } from "./lib/analytics.js";
 import { getThemePref, setThemePref } from "./lib/theme.js";
+import { playRefresh, playPost, playReact, getSoundPref, setSoundPref, unlockAudio } from "./lib/sound.js";
 
 /* ================================================================== *
  *  QUANDARY  —  Every hypothetical deserves an answer.
@@ -350,11 +351,20 @@ export default function Quandary() {
     }
   }
   useEffect(() => { loadAll(); }, []);
+  useEffect(() => {
+    // Sounds fire after awaited network calls, which can be too far from the
+    // triggering tap for strict browsers to allow starting audio. Unlocking
+    // on the very first tap in the app (a real, synchronous user gesture)
+    // sidesteps that — every sound after this point plays reliably.
+    const unlock = () => { unlockAudio(); document.removeEventListener("pointerdown", unlock); };
+    document.addEventListener("pointerdown", unlock, { once: true });
+    return () => document.removeEventListener("pointerdown", unlock);
+  }, []);
 
   // Pull-to-refresh: drag down from the top of the feed to reload everything.
   const doRefresh = async () => {
     if (refreshingRef.current) return;
-    refreshingRef.current = true; setRefreshing(true);
+    refreshingRef.current = true; setRefreshing(true); playRefresh();
     try { await loadAll(); } finally {
       setRefreshing(false); refreshingRef.current = false; setPullY(0);
     }
@@ -440,7 +450,7 @@ export default function Quandary() {
     catch (e) { flash(e.message); }
   };
   const reply = async (qId, text) => {
-    try { await supabase.from("replies").insert({ question_id: qId, author_id: me, body: text }); track("reply_posted"); await loadAll(); }
+    try { await supabase.from("replies").insert({ question_id: qId, author_id: me, body: text }); track("reply_posted"); playPost(); await loadAll(); }
     catch (e) { flash(e.message); }
   };
   const askClarif = async (qId, text) => {
@@ -485,6 +495,7 @@ export default function Quandary() {
       } else {
         await supabase.from("reactions").upsert({ reply_id: replyId, user_id: me, emoji }, { onConflict: "reply_id,user_id" });
         track("reaction_added", { emoji });
+        playReact();
       }
       await loadAll();
     } catch (e) { flash(e.message); }
@@ -736,6 +747,7 @@ export default function Quandary() {
         if (oErr) throw oErr;
       }
       track("question_posted", { flair: q.flair, format: q.format, anonymous: q.anon, anonymous_replies: !!q.anonReplies });
+      playPost();
       await loadAll(); setTab("feed"); setFilter("all"); setSort("new"); flash("Posted — your question is live");
     } catch (e) { flash(e.message); }
   };
@@ -1398,6 +1410,7 @@ function Alerts({ activity, prefs, updatePrefs, onOpen, onUser }) {
 /* ---------- APPEARANCE (night mode) ---------- */
 function ThemeToggle() {
   const [pref, setPref] = useState(() => getThemePref());
+  const [sound, setSound] = useState(() => getSoundPref());
   const pick = (p) => { setThemePref(p); setPref(p); };
   const OPTIONS = [
     { key: "system", label: "System", icon: <Smartphone size={15} /> },
@@ -1414,6 +1427,10 @@ function ThemeToggle() {
           </button>
         ))}
       </div>
+      <label className="prefrow soundrow">
+        <input type="checkbox" checked={sound} onChange={(e) => { setSoundPref(e.target.checked); setSound(e.target.checked); }} />
+        <span>Sound effects</span>
+      </label>
     </div>
   );
 }
@@ -1950,6 +1967,7 @@ html[data-theme="dark"] .wm-swap .wm-dark{display:inline-block;}
 .themerow{display:flex; gap:8px;}
 .themebtn{flex:1; display:flex; flex-direction:column; align-items:center; gap:5px; background:var(--lav); border:1.5px solid var(--line); color:var(--muted); padding:12px 8px; border-radius:14px; font-weight:700; font-size:12.5px; cursor:pointer; font-family:var(--body);}
 .themebtn.on{background:var(--purple); border-color:var(--purple); color:#fff;}
+.soundrow{margin-top:12px;}
 .streakcard{background:linear-gradient(95deg,#FFF3E0,#FFE8D6); border:1px solid #FFD9B0; border-radius:16px; padding:14px 16px; margin:2px 0 14px;}
 .streak-row{display:flex; align-items:center; gap:8px; font-size:14.5px; font-weight:700; color:#8a4a00; margin-bottom:4px;}
 .streak-flame{font-size:19px; line-height:1;}
