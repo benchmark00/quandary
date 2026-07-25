@@ -159,6 +159,13 @@ function Auth({ onDismiss }) {
           Continue with Google
         </button>
         </>)}
+        {mode === "signup" && (
+          <p className="auth-legal">
+            By creating an account, you agree to our{" "}
+            <a href="/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a>{" "}and{" "}
+            <a href="/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>.
+          </p>
+        )}
         <button className="auth-switch" onClick={() => { setMode(mode === "reset" || mode === "login" ? (mode === "reset" ? "login" : "signup") : "login"); setError(""); setNote(""); }}>
           {mode === "signup" ? "Already have an account? Log in" : mode === "reset" ? "Back to log in" : "New here? Create an account"}
         </button>
@@ -357,6 +364,8 @@ function AuthStyle() {
 .land-footer{max-width:430px; margin:22px auto 0; padding:0 18px 26px; text-align:center; color:#A3A3B8; font-size:11.5px; line-height:1.65;}
 .land-footer p{margin:0 0 6px;}
 .auth-switch{width:100%; background:none; border:none; color:#6C4DFF; font-weight:600; font-size:13.5px; cursor:pointer; margin-top:16px; font-family:inherit;}
+.auth-legal{font-size:12px; line-height:1.5; color:#9A9AAd; text-align:center; margin:16px 2px 0;}
+.auth-legal a{color:#6E6E86; text-decoration:underline;}
 .auth-err{background:#FFE9F2; color:#C2185B; border-radius:10px; padding:10px 12px; font-size:13px; margin-bottom:11px; text-align:left;}
 .auth-note{background:#E9FBF6; color:#0C8C73; border-radius:10px; padding:10px 12px; font-size:13px; margin-bottom:11px; text-align:left;}
 .dev-signout{position:fixed; top:12px; right:12px; z-index:999; background:#0D0F1A; color:#fff; border:none;

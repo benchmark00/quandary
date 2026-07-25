@@ -1428,6 +1428,11 @@ function Profile({ me, questions, following, followerCount = 0, onFollow, onOpen
             <span className="meta">{totalVotes(q) + q.replies.length}</span></button>); })}</div>}
       <button className="btn-text full" onClick={replay}>View the intro again</button>
       <button className="signout-btn" onClick={() => supabase.auth.signOut()}>Sign out</button>
+      <p className="legal-foot">
+        <a href="/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+        <span> · </span>
+        <a href="/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a>
+      </p>
     </div>
   );
 }
@@ -1924,6 +1929,8 @@ html, body{height:100%; margin:0; overflow:hidden; overscroll-behavior:none;}
 .edit-save{background:var(--purple); color:#fff; border:none; border-radius:999px; padding:8px 18px; font-weight:700; font-size:13px; cursor:pointer; font-family:var(--body);}
 .edit-save:disabled{opacity:.45; cursor:default;}
 .signout-btn{width:100%; background:none; border:1.5px solid var(--line); color:#C2185B; font-weight:700; font-size:14px; padding:12px; border-radius:13px; cursor:pointer; font-family:var(--body); margin-top:10px;}
+.legal-foot{text-align:center; font-size:12px; margin:16px 0 0; color:var(--muted);}
+.legal-foot a{color:var(--muted); text-decoration:underline;}
 
 .as-btn{background:none; border:none; padding:0; cursor:pointer; text-align:left; color:inherit; font-family:inherit;}
 button.byline.as-btn{display:flex; gap:9px; align-items:center; flex:1; min-width:0;}
