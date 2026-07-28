@@ -189,7 +189,7 @@ function questionPage(q, related) {
   <div class="wrap">
     <header>
       <a href="/"><img src="/wordmark.png" alt="Quandary" /></a>
-      <a class="cta-top" href="/q/${q.id}">Vote now</a>
+      <a class="cta-top" href="/q/${q.id}" rel="nofollow">Vote now</a>
     </header>
     <main>
       <span class="flair">${esc(flairLabel)}</span>
@@ -198,7 +198,7 @@ function questionPage(q, related) {
       ${pollHtml}
       <div class="cta-box">
         <p>What's your answer? Join the debate and see how the world disagrees with you.</p>
-        <a class="cta-btn" href="/q/${q.id}">Sign up &amp; vote →</a>
+        <a class="cta-btn" href="/q/${q.id}" rel="nofollow">Sign up &amp; vote →</a>
       </div>
       ${repliesHtml}
     </main>
