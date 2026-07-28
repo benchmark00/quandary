@@ -43,6 +43,27 @@ const PROFILES = {};
 const userById = (id) =>
   PROFILES[id] || { id, name: "Someone", handle: "someone", color: "#6C4DFF" };
 
+/* How many questions the feed loads at a time. "Load more" adds another page. */
+const PAGE_SIZE = 25;
+const QUESTION_COLS = "id, author_id, flair, format, title, body, anonymous, anonymous_replies, hidden, exclude_seo, slug, created_at";
+const PROFILE_COLS = "id, name, handle, color, onboarded, is_admin, needs_handle, created_at, avatar_url";
+
+/* Supabase puts filters in the URL, so a very long .in(...) list can blow past
+   the maximum URL length and fail the whole request. Every lookup-by-list of
+   ids goes through here, which splits the list into safe chunks and runs them
+   in parallel. */
+const ID_CHUNK = 80;
+async function fetchIn(table, cols, col, ids) {
+  const list = [...new Set(ids)].filter(Boolean);
+  if (!list.length) return [];
+  const chunks = [];
+  for (let i = 0; i < list.length; i += ID_CHUNK) chunks.push(list.slice(i, i + ID_CHUNK));
+  const results = await Promise.all(chunks.map((c) => supabase.from(table).select(cols).in(col, c)));
+  const out = [];
+  results.forEach((r) => { if (r.data) out.push(...r.data); });
+  return out;
+}
+
 const REACTIONS = [
   ["heart", "❤️"],
   ["fire", "🔥"],
@@ -248,6 +269,18 @@ export default function Quandary() {
   const flash = (m) => setToast(m);
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 2200); return () => clearTimeout(t); }, [toast]);
 
+  /* Feed paging. limitRef holds how many questions the feed should currently
+     show; loadAll always re-reads that many, so refreshes and "load more" use
+     one single code path instead of separate append logic. */
+  const limitRef = useRef(PAGE_SIZE);
+  const filterRef = useRef("all");
+  const [hasMore, setHasMore] = useState(false);
+  /* Which questions belong to the feed page. Saved / reported / daily
+     questions are also loaded so they can be opened, but they must not appear
+     in the feed unless they're genuinely part of the current page. */
+  const [feedIds, setFeedIds] = useState(() => new Set());
+  const [loadingMore, setLoadingMore] = useState(false);
+
   async function loadAll() {
     try {
       setError("");
@@ -255,55 +288,106 @@ export default function Quandary() {
       if (!user) { setError("You're not signed in."); setLoading(false); return; }
       setMe(user.id);
 
-      const [{ data: profiles }, { data: baseQs }] = await Promise.all([
-        supabase.from("profiles").select("id, name, handle, color, onboarded, is_admin, needs_handle, created_at, avatar_url"),
-        supabase.from("questions").select("id, author_id, flair, format, title, body, anonymous, anonymous_replies, hidden, exclude_seo, slug, created_at"),
-      ]);
-      (profiles || []).forEach((p) => { PROFILES[p.id] = p; });
-      const myProfile = (profiles || []).find((p) => p.id === user.id);
+      /* 1) My own profile first — we need to know whether I'm an admin before
+            deciding if hidden questions belong in the feed. */
+      const { data: myProfile } = await supabase.from("profiles")
+        .select(PROFILE_COLS).eq("id", user.id).maybeSingle();
+      if (myProfile) PROFILES[myProfile.id] = myProfile;
       setOnboarded(myProfile ? myProfile.onboarded === true : true);
       const amAdmin = myProfile ? myProfile.is_admin === true : false;
       setIsAdmin(amAdmin);
       if (myProfile) identifyUser(user.id, { handle: myProfile.handle, name: myProfile.name, is_admin: amAdmin });
       setNeedsHandle(myProfile ? myProfile.needs_handle === true : false);
-      if (amAdmin) {
-        const { data: reps } = await supabase.from("reports")
-          .select("id, question_id, reporter_id, reason, created_at");
-        setReports(reps || []);
-      }
 
-      const ids = (baseQs || []).map((q) => q.id);
-      const inIds = ids.length ? ids : ["00000000-0000-0000-0000-000000000000"];
-
-      const [opts, votes, myVotes, replies, clarifs, ratings, myFollows, mySaves, myFollowers, notifs, myPrefs, qotdRes, reactionsRes] = await Promise.all([
-        supabase.from("question_options").select("id, question_id, label, position").in("question_id", inIds),
-        supabase.from("vote_details").select("question_id, option_id, voter_id").in("question_id", inIds),
-        supabase.from("votes").select("question_id, option_id").eq("voter_id", user.id),
-        supabase.from("reply_details").select("id, question_id, author_id, body, created_at").in("question_id", inIds),
-        supabase.from("clarifications").select("id, question_id, asker_id, body, answer_body, answered_at, created_at, hidden").in("question_id", inIds),
-        supabase.from("ratings").select("question_id, rater_id, stars").in("question_id", inIds),
+      /* 2) Small, user-scoped lists. Saves are fetched before the feed because
+            a saved question has to load even if it's long since scrolled past. */
+      const [myFollows, mySaves, myFollowers, notifs, myPrefs, qotdRes] = await Promise.all([
         supabase.from("follows").select("followee_id").eq("follower_id", user.id),
-        supabase.from("saves").select("question_id").eq("user_id", user.id),
+        supabase.from("saves").select("question_id").eq("user_id", user.id).limit(200),
         supabase.from("follows").select("follower_id").eq("followee_id", user.id),
         supabase.from("notifications").select("id, actor_id, type, question_id, created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(40),
         supabase.from("notification_prefs").select("every_question, followed_only, categories, notify_replies, notify_clarifs").eq("user_id", user.id).maybeSingle(),
         supabase.rpc("get_qotd"),
-        supabase.from("reactions").select("reply_id, user_id, emoji"),
       ]);
 
+      let reportedIds = [];
+      if (amAdmin) {
+        const { data: reps } = await supabase.from("reports")
+          .select("id, question_id, reporter_id, reason, created_at")
+          .order("created_at", { ascending: false }).limit(200);
+        setReports(reps || []);
+        /* The moderation queue matches reports against loaded questions, so a
+           reported question that has scrolled off the page must still be
+           fetched — otherwise reports would silently vanish from the queue. */
+        reportedIds = (reps || []).map((r) => r.question_id);
+        /* The admin signups list reads from the profile cache, so top it up. */
+        const { data: allP } = await supabase.from("profiles").select(PROFILE_COLS)
+          .order("created_at", { ascending: false }).limit(500);
+        (allP || []).forEach((pr) => { PROFILES[pr.id] = pr; });
+      }
+
+      /* 3) The feed page itself: newest first, bounded. One extra row is
+            requested so we can tell whether a "Load more" button is needed. */
+      const limit = limitRef.current;
+      let feedQuery = supabase.from("questions").select(QUESTION_COLS)
+        .order("created_at", { ascending: false }).limit(limit + 1);
+      if (!amAdmin) feedQuery = feedQuery.eq("hidden", false);
+      if (filterRef.current !== "all") feedQuery = feedQuery.eq("flair", filterRef.current);
+      const { data: feedRaw, error: feedErr } = await feedQuery;
+      if (feedErr) throw feedErr;
+      setHasMore((feedRaw || []).length > limit);
+      const feedRows = (feedRaw || []).slice(0, limit);
+      setFeedIds(new Set(feedRows.map((q) => q.id)));
+
+      /* 4) Questions that must stay available even when they're older than the
+            current page: the daily question, saved ones, and a deep link. */
+      const qotdTarget = qotdRes && qotdRes.data ? qotdRes.data : null;
+      const savedIds = (mySaves.data || []).map((sv) => sv.question_id);
+      const dlMatch = window.location.pathname.match(/^\/q\/([0-9a-fA-F-]{20,})/);
+      const already = new Set(feedRows.map((q) => q.id));
+      const extraIds = [qotdTarget, dlMatch ? dlMatch[1] : null, ...savedIds, ...reportedIds]
+        .filter((id) => id && !already.has(id));
+      const extraRows = (await fetchIn("questions", QUESTION_COLS, "id", extraIds))
+        .filter((q) => amAdmin || !q.hidden);
+      const baseQs = [...feedRows, ...extraRows];
+      const ids = baseQs.map((q) => q.id);
+
+      /* 5) Everything hanging off those questions — all bounded by the page. */
+      const [opts, votes, myVotesRes, replies, clarifs, ratings] = await Promise.all([
+        fetchIn("question_options", "id, question_id, label, position", "question_id", ids),
+        fetchIn("vote_details", "question_id, option_id, voter_id", "question_id", ids),
+        supabase.from("votes").select("question_id, option_id").eq("voter_id", user.id),
+        fetchIn("reply_details", "id, question_id, author_id, body, created_at", "question_id", ids),
+        fetchIn("clarifications", "id, question_id, asker_id, body, answer_body, answered_at, created_at, hidden", "question_id", ids),
+        fetchIn("ratings", "question_id, rater_id, stars", "question_id", ids),
+      ]);
+      /* Reactions only for the replies we actually loaded. */
+      const reactionRows = await fetchIn("reactions", "reply_id, user_id, emoji", "reply_id", replies.map((r) => r.id));
+
+      /* 6) Only the profiles referenced by what we loaded. */
+      const need = new Set([user.id]);
+      baseQs.forEach((q) => need.add(q.author_id));
+      replies.forEach((r) => r.author_id && need.add(r.author_id));
+      clarifs.forEach((c) => c.asker_id && need.add(c.asker_id));
+      votes.forEach((v) => v.voter_id && need.add(v.voter_id));
+      (myFollows.data || []).forEach((f) => need.add(f.followee_id));
+      (myFollowers.data || []).forEach((f) => need.add(f.follower_id));
+      (notifs.data || []).forEach((n) => n.actor_id && need.add(n.actor_id));
+      (await fetchIn("profiles", PROFILE_COLS, "id", [...need])).forEach((pr) => { PROFILES[pr.id] = pr; });
+
       const reactByReply = {};
-      (reactionsRes.data || []).forEach((r) => { (reactByReply[r.reply_id] = reactByReply[r.reply_id] || []).push(r); });
+      reactionRows.forEach((r) => { (reactByReply[r.reply_id] = reactByReply[r.reply_id] || []).push(r); });
       const myVoteByQ = {};
-      (myVotes.data || []).forEach((v) => { myVoteByQ[v.question_id] = v.option_id; });
+      (myVotesRes.data || []).forEach((v) => { myVoteByQ[v.question_id] = v.option_id; });
 
       const grp = (rows, key) => { const m = {}; (rows || []).forEach((r) => { (m[r[key]] = m[r[key]] || []).push(r); }); return m; };
-      const optG = grp(opts.data, "question_id");
-      const voteG = grp(votes.data, "question_id");
-      const repG = grp(replies.data, "question_id");
-      const clarG = grp(clarifs.data, "question_id");
-      const ratG = grp(ratings.data, "question_id");
+      const optG = grp(opts, "question_id");
+      const voteG = grp(votes, "question_id");
+      const repG = grp(replies, "question_id");
+      const clarG = grp(clarifs, "question_id");
+      const ratG = grp(ratings, "question_id");
 
-      const shaped = (baseQs || []).map((q) => {
+      const shaped = baseQs.map((q) => {
         const options = (optG[q.id] || []).sort((a, b) => a.position - b.position).map((o) => {
           const rows = (voteG[q.id] || []).filter((v) => v.option_id === o.id);
           const real = rows.filter((v) => v.voter_id).map((v) => v.voter_id);
@@ -352,6 +436,23 @@ export default function Quandary() {
     }
   }
   useEffect(() => { loadAll(); }, []);
+
+  const loadMore = async () => {
+    if (loadingMore) return;
+    setLoadingMore(true);
+    limitRef.current += PAGE_SIZE;
+    try { await loadAll(); } finally { setLoadingMore(false); }
+  };
+
+  /* Changing the category chip re-queries the server, so a filtered view
+     searches the whole database rather than only the page already loaded. */
+  const firstFilterRun = useRef(true);
+  useEffect(() => {
+    filterRef.current = filter;
+    if (firstFilterRun.current) { firstFilterRun.current = false; return; }
+    limitRef.current = PAGE_SIZE;
+    loadAll();
+  }, [filter]);
   useEffect(() => {
     // Sounds fire after awaited network calls, which can be too far from the
     // triggering tap for strict browsers to allow starting audio. Unlocking
@@ -402,13 +503,24 @@ export default function Quandary() {
     };
   }, [loading]);
 
+  const reloadTimer = useRef(null);
   // Item 10 — live feed: when anyone posts a question or reply, refresh.
   useEffect(() => {
+    /* Every insert used to trigger its own full reload, so a busy moment meant
+       one refetch per event per open tab. Now they collapse into a single
+       refresh a couple of seconds after activity settles. */
+    const scheduleReload = () => {
+      if (reloadTimer.current) clearTimeout(reloadTimer.current);
+      reloadTimer.current = setTimeout(() => { reloadTimer.current = null; loadAll(); }, 2500);
+    };
     const ch = supabase.channel("live-feed")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "questions" }, () => loadAll())
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "replies" }, () => loadAll())
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "questions" }, scheduleReload)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "replies" }, scheduleReload)
       .subscribe();
-    return () => { supabase.removeChannel(ch); };
+    return () => {
+      if (reloadTimer.current) clearTimeout(reloadTimer.current);
+      supabase.removeChannel(ch);
+    };
   }, []);
 
   // Onboarding uses updater-style setPrefs; persist those picks as well.
@@ -754,14 +866,14 @@ export default function Quandary() {
   };
 
   const visible = useMemo(() => {
-    let list = [...questions];
+    let list = questions.filter((q) => feedIds.has(q.id));
     if (filter !== "all") list = list.filter((q) => q.flair === filter);
     if (sort === "new") list.sort((a, b) => b.ts - a.ts);
     else if (sort === "hot") list.sort((a, b) => (totalVotes(b) + b.replies.length * 2 + avg(b.ratings)) - (totalVotes(a) + a.replies.length * 2 + avg(a.ratings)));
     else if (sort === "following") { list = list.filter((q) => following.has(q.authorId)); list.sort((a, b) => b.ts - a.ts); }
     if (filter === "all" && sort !== "following" && qotdId) list = list.filter((q) => q.id !== qotdId);
     return list;
-  }, [questions, filter, sort, following, qotdId]);
+  }, [questions, feedIds, filter, sort, following, qotdId]);
 
   const openQ = questions.find((q) => q.id === open);
 
@@ -795,7 +907,8 @@ export default function Quandary() {
           {tab === "feed" && (
             <Feed list={visible} qotd={filter === "all" && sort !== "following" ? questions.find((q) => q.id === qotdId) : null}
               filter={filter} setFilter={setFilter} sort={sort} setSort={setSort}
-              saved={saved} following={following} onOpen={setOpen} onSave={toggleSave} onFollow={toggleFollow} onUser={openUser} me={me} />
+              saved={saved} following={following} onOpen={setOpen} onSave={toggleSave} onFollow={toggleFollow} onUser={openUser} me={me}
+              hasMore={hasMore} onLoadMore={loadMore} loadingMore={loadingMore} />
           )}
           {tab === "create" && <Create onPost={createQuestion} me={me} />}
           {tab === "saved" && <Saved list={questions.filter((q) => saved.has(q.id))} onOpen={setOpen} saved={saved} onSave={toggleSave} following={following} onFollow={toggleFollow} onUser={openUser} me={me} />}
@@ -820,7 +933,7 @@ export default function Quandary() {
             isAdmin={isAdmin} onToggleHidden={toggleHidden} onToggleSeo={toggleSeo} onDeleteReply={deleteReply}
             onEditClarif={editClarif} onToggleClarifHidden={toggleClarifHidden} onDeleteClarif={deleteClarif} onShare={shareQuestion} onReact={react} onShareCard={shareResultsCard} />
         )}
-        {searchOpen && <SearchOverlay questions={questions} onClose={() => setSearchOpen(false)} onOpen={(id) => { setSearchOpen(false); setOpen(id); }} />}
+        {searchOpen && <SearchOverlay onClose={() => setSearchOpen(false)} onOpen={(id) => { setSearchOpen(false); setOpen(id); }} />}
         {viewUser && (
           <UserProfile userId={viewUser} me={me} questions={questions} following={following}
             initialTab={viewUserTab} onFollow={toggleFollow}
@@ -923,13 +1036,33 @@ function Onboarding({ onDone, prefs, setPrefs }) {
 }
 
 /* ---------- SEARCH ---------- */
-function SearchOverlay({ questions, onClose, onOpen }) {
+function SearchOverlay({ onClose, onOpen }) {
   const [q, setQ] = useState("");
-  const results = useMemo(() => {
-    const t = q.trim().toLowerCase();
-    if (!t) return [];
-    return questions.filter((x) => (x.title + " " + x.body + " " + FLAIRS[x.flair].label).toLowerCase().includes(t));
-  }, [q, questions]);
+  const [results, setResults] = useState([]);
+  const [busy, setBusy] = useState(false);
+  /* Searches the database rather than only the questions currently loaded in
+     the feed, so it keeps working once there are thousands of them. Typing is
+     debounced so we don't fire a query per keystroke. */
+  useEffect(() => {
+    const t = q.trim();
+    if (!t) { setResults([]); setBusy(false); return; }
+    setBusy(true);
+    let live = true;
+    const timer = setTimeout(async () => {
+      // Commas, percent signs and brackets are meaningful in the filter
+      // syntax, so strip them out of the user's text before building it.
+      const safe = t.replace(/[%,()]/g, " ").trim();
+      if (!safe) { if (live) { setResults([]); setBusy(false); } return; }
+      const { data } = await supabase.from("questions")
+        .select("id, title, body, flair, author_id, created_at")
+        .eq("hidden", false)
+        .or(`title.ilike.%${safe}%,body.ilike.%${safe}%`)
+        .order("created_at", { ascending: false })
+        .limit(30);
+      if (live) { setResults(data || []); setBusy(false); }
+    }, 300);
+    return () => { live = false; clearTimeout(timer); };
+  }, [q]);
   return (
     <div className="search-ov">
       <div className="search-head">
@@ -938,15 +1071,16 @@ function SearchOverlay({ questions, onClose, onOpen }) {
         <button className="iconbtn" onClick={onClose} aria-label="Close search"><X size={20} /></button>
       </div>
       <div className="search-body">
-        {!q.trim() && <p className="empty-inline">Try “mango”, “time”, or a category like “moral”.</p>}
-        {q.trim() && results.length === 0 && <p className="empty-inline">No questions match “{q.trim()}”.</p>}
+        {!q.trim() && <p className="empty-inline">Try “duck”, “wallet”, or a category like “moral”.</p>}
+        {q.trim() && busy && <p className="empty-inline">Searching…</p>}
+        {q.trim() && !busy && results.length === 0 && <p className="empty-inline">No questions match “{q.trim()}”.</p>}
         {results.map((x) => {
-          const f = FLAIRS[x.flair]; const Icon = f.icon;
+          const f = FLAIRS[x.flair] || FLAIRS.free; const Icon = f.icon;
           return (
             <button key={x.id} className="sresult" onClick={() => onOpen(x.id)}>
               <span className="flairtag" style={{ color: f.tint }}><Icon size={12} /> {f.label}</span>
               <span className="sres-title">{x.title}</span>
-              <span className="meta">{userById(x.authorId).name} · {totalVotes(x) + x.replies.length} answers</span>
+              <span className="meta">{userById(x.author_id).name} · {new Date(x.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>
             </button>
           );
         })}
@@ -956,7 +1090,7 @@ function SearchOverlay({ questions, onClose, onOpen }) {
 }
 
 /* ---------- FEED ---------- */
-function Feed({ list, qotd, filter, setFilter, sort, setSort, saved, following, onOpen, onSave, onFollow, onUser, me }) {
+function Feed({ list, qotd, filter, setFilter, sort, setSort, saved, following, onOpen, onSave, onFollow, onUser, me, hasMore, onLoadMore, loadingMore }) {
   return (
     <>
       <div className="sortrow">
@@ -980,6 +1114,11 @@ function Feed({ list, qotd, filter, setFilter, sort, setSort, saved, following, 
           {list.map((q) => <Card key={q.id} q={q} me={me} saved={saved.has(q.id)} isFollowing={following.has(q.authorId)}
             onOpen={() => onOpen(q.id)} onSave={() => onSave(q.id)} onFollow={() => onFollow(q.authorId)} onUser={onUser} />)}
         </div>
+      )}
+      {hasMore && (
+        <button className="loadmore" onClick={onLoadMore} disabled={loadingMore}>
+          {loadingMore ? "Loading…" : "Load more questions"}
+        </button>
       )}
     </>
   );
@@ -1139,9 +1278,15 @@ function Detail({ q, me, following, saved, onClose, onVote, onRate, onReply, onR
                       {revealed && <span className="polpct">{pct}%</span>}
                     </button>
                     {revealed && !q.anon && o.voters.length > 0 && (
-                      <div className="voters">{o.voters.map((v, i) => v
-                        ? <button key={v + i} className="vchip as-btn" onClick={() => onOpenUser && onOpenUser(v)}><Avatar id={v} size={18} />{userById(v).name.split(" ")[0]}</button>
-                        : <span key={"anon" + i} className="vchip"><span className="avatar" style={{ width: 18, height: 18, background: "#C9C9DC", fontSize: 9 }}>?</span>anon</span>)}</div>
+                      <div className="voters">
+                        {/* Only ever render a handful of faces — a question with
+                            hundreds of votes would otherwise mount hundreds of
+                            avatars and stall the sheet. */}
+                        {o.voters.slice(0, 12).map((v, i) => v
+                          ? <button key={v + i} className="vchip as-btn" onClick={() => onOpenUser && onOpenUser(v)}><Avatar id={v} size={18} />{userById(v).name.split(" ")[0]}</button>
+                          : <span key={"anon" + i} className="vchip"><span className="avatar" style={{ width: 18, height: 18, background: "#C9C9DC", fontSize: 9 }}>?</span>anon</span>)}
+                        {o.voters.length > 12 && <span className="vchip vmore">+{o.voters.length - 12} more</span>}
+                      </div>
                     )}
                   </div>
                 );
@@ -1408,6 +1553,25 @@ function Alerts({ activity, prefs, updatePrefs, onOpen, onUser }) {
   );
 }
 
+/* A user's own questions, fetched directly rather than filtered out of the
+   loaded feed page — otherwise a profile would under-report once someone has
+   asked more questions than the feed currently holds. The `count` is the true
+   total; the rows are the 50 most recent. */
+function useAuthoredQuestions(userId) {
+  const [state, setState] = useState({ rows: null, count: null });
+  useEffect(() => {
+    if (!userId) return undefined;
+    let live = true;
+    supabase.from("questions")
+      .select("id, title, flair, created_at", { count: "exact" })
+      .eq("author_id", userId).eq("hidden", false)
+      .order("created_at", { ascending: false }).limit(50)
+      .then(({ data, count }) => { if (live) setState({ rows: data || [], count: count || 0 }); });
+    return () => { live = false; };
+  }, [userId]);
+  return state;
+}
+
 /* ---------- APPEARANCE (night mode) ---------- */
 function ThemeToggle() {
   const [pref, setPref] = useState(() => getThemePref());
@@ -1447,6 +1611,14 @@ function ThemeToggle() {
 function Profile({ me, questions, following, followerCount = 0, onFollow, onOpen, onUser, replay, onAvatar, onInvite }) {
   const fileRef = useRef(null);
   const mine = questions.filter((q) => q.authorId === me); const u = userById(me);
+  const authored = useAuthoredQuestions(me);
+  const myList = authored.rows || mine;
+  const myCount = authored.count == null ? mine.length : authored.count;
+  /* Engagement numbers only exist for questions in the loaded page. */
+  const engagementOf = (id) => {
+    const q = questions.find((x) => x.id === id);
+    return q ? totalVotes(q) + q.replies.length : null;
+  };
   const [streak, setStreak] = useState(null);
   useEffect(() => {
     let live = true;
@@ -1467,7 +1639,7 @@ function Profile({ me, questions, following, followerCount = 0, onFollow, onOpen
         <div><div className="profname">{u.name}</div><div className="meta">@{u.handle}</div></div>
       </div>
       <div className="profstats">
-        <div><b>{mine.length}</b><span>asked</span></div>
+        <div><b>{myCount}</b><span>asked</span></div>
         <button className="as-stat" onClick={() => onUser && onUser(me, "followers")}><b>{followerCount}</b><span>followers</span></button>
         <button className="as-stat" onClick={() => onUser && onUser(me, "following")}><b>{following.size}</b><span>following</span></button>
       </div>
@@ -1508,11 +1680,12 @@ function Profile({ me, questions, following, followerCount = 0, onFollow, onOpen
         {following.size === 0 && <p className="empty-inline">You're not following anyone yet.</p>}
       </div>
       <div className="prefsub">Your questions</div>
-      {mine.length === 0 ? <p className="empty-inline">You haven't asked anything yet.</p> :
-        <div className="cards">{mine.map((q) => { const f = FLAIRS[q.flair]; const Icon = f.icon;
+      {myList.length === 0 ? <p className="empty-inline">You haven't asked anything yet.</p> :
+        <div className="cards">{myList.map((q) => { const f = FLAIRS[q.flair] || FLAIRS.free; const Icon = f.icon;
+          const n = engagementOf(q.id);
           return (<button key={q.id} className="minirow" onClick={() => onOpen(q.id)}>
             <Icon size={15} style={{ color: f.tint, flexShrink: 0 }} /><span className="minititle">{q.title}</span>
-            <span className="meta">{totalVotes(q) + q.replies.length}</span></button>); })}</div>}
+            <span className="meta">{n == null ? "" : n}</span></button>); })}</div>}
       <button className="btn-text full" onClick={replay}>View the intro again</button>
       <button className="signout-btn" onClick={() => supabase.auth.signOut()}>Sign out</button>
       <p className="legal-foot">
@@ -1547,7 +1720,14 @@ function UserProfile({ userId, me, questions, following, initialTab = "questions
     })();
   }, [userId, initialTab]);
 
-  const asked = questions.filter((q) => q.authorId === userId).sort((a, b) => b.ts - a.ts);
+  const authored = useAuthoredQuestions(userId);
+  const asked = authored.rows
+    || questions.filter((q) => q.authorId === userId).sort((a, b) => b.ts - a.ts);
+  const askedCount = authored.count == null ? asked.length : authored.count;
+  const engagementOf = (id) => {
+    const q = questions.find((x) => x.id === id);
+    return q ? totalVotes(q) + q.replies.length : null;
+  };
 
   const UserRow = ({ id }) => (
     <div className="folrow">
@@ -1587,7 +1767,7 @@ function UserProfile({ userId, me, questions, following, initialTab = "questions
 
           <div className="profstats">
             <button className={"as-stat" + (tabSel === "questions" ? " sel" : "")} onClick={() => setTabSel("questions")}>
-              <b>{asked.length}</b><span>asked</span>
+              <b>{askedCount}</b><span>asked</span>
             </button>
             <button className={"as-stat" + (tabSel === "followers" ? " sel" : "")} onClick={() => setTabSel("followers")}>
               <b>{followers === null ? "…" : followers.length}</b><span>followers</span>
@@ -1600,12 +1780,13 @@ function UserProfile({ userId, me, questions, following, initialTab = "questions
           {tabSel === "questions" && (
             asked.length === 0 ? <p className="empty-inline">{isMe ? "You haven't" : `${u.name.split(" ")[0]} hasn't`} asked anything yet.</p> :
             <div className="cards" style={{ padding: "8px 0 20px" }}>
-              {asked.map((q) => { const f = FLAIRS[q.flair]; const Icon = f.icon;
+              {asked.map((q) => { const f = FLAIRS[q.flair] || FLAIRS.free; const Icon = f.icon;
+                const n = engagementOf(q.id);
                 return (
                   <button key={q.id} className="minirow" onClick={() => onOpenQuestion(q.id)}>
                     <Icon size={15} style={{ color: f.tint, flexShrink: 0 }} />
                     <span className="minititle">{q.title}</span>
-                    <span className="meta">{totalVotes(q) + q.replies.length}</span>
+                    <span className="meta">{n == null ? "" : n}</span>
                   </button>
                 ); })}
             </div>
@@ -1681,15 +1862,39 @@ function AdminPanel({ questions, reports, me, onOpen, onUser, onToggleHidden }) 
     .filter((x) => x.q)
     .sort((a, b) => b.reps.length - a.reps.length);
 
-  const weekAgo = Date.now() - 7 * 864e5;
-  const stats = [
-    [people.length, "users"],
-    [questions.length, "questions"],
-    [questions.filter((q) => q.ts > weekAgo).length, "asked this week"],
-    [questions.reduce((n, q) => n + totalVotes(q), 0), "votes cast"],
-    [questions.reduce((n, q) => n + q.replies.length, 0), "replies"],
-    [questions.filter((q) => q.hidden).length, "hidden"],
-  ];
+  /* Counted on the server. The feed only holds a page of questions now, so
+     counting the loaded array would quietly under-report every number here. */
+  const [counts, setCounts] = useState(null);
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      const weekIso = new Date(Date.now() - 7 * 864e5).toISOString();
+      const head = { count: "exact", head: true };
+      const [users, qs, week, votes, reps, hid] = await Promise.all([
+        supabase.from("profiles").select("*", head),
+        supabase.from("questions").select("*", head),
+        supabase.from("questions").select("*", head).gt("created_at", weekIso),
+        supabase.from("votes").select("*", head),
+        supabase.from("replies").select("*", head),
+        supabase.from("questions").select("*", head).eq("hidden", true),
+      ]);
+      if (!live) return;
+      setCounts({
+        users: users.count || 0, questions: qs.count || 0, week: week.count || 0,
+        votes: votes.count || 0, replies: reps.count || 0, hidden: hid.count || 0,
+      });
+    })();
+    return () => { live = false; };
+  }, []);
+
+  const stats = counts ? [
+    [counts.users, "users"],
+    [counts.questions, "questions"],
+    [counts.week, "asked this week"],
+    [counts.votes, "votes cast"],
+    [counts.replies, "replies"],
+    [counts.hidden, "hidden"],
+  ] : [["…", "users"], ["…", "questions"], ["…", "asked this week"], ["…", "votes cast"], ["…", "replies"], ["…", "hidden"]];
 
   const fmtDate = (iso) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 
@@ -1976,6 +2181,9 @@ html[data-theme="dark"] .wm-swap .wm-dark{display:inline-block;}
 .themebtn{flex:1; display:flex; flex-direction:column; align-items:center; gap:5px; background:var(--lav); border:1.5px solid var(--line); color:var(--muted); padding:12px 8px; border-radius:14px; font-weight:700; font-size:12.5px; cursor:pointer; font-family:var(--body);}
 .themebtn.on{background:var(--purple); border-color:var(--purple); color:#fff;}
 .soundrow{margin-top:12px;}
+.loadmore{display:block; width:100%; margin:14px 0 4px; background:var(--surface); border:1.5px solid var(--line); color:var(--purple); font-family:var(--body); font-weight:700; font-size:14px; padding:13px; border-radius:14px; cursor:pointer;}
+.loadmore:disabled{opacity:.6; cursor:default;}
+.vmore{color:var(--muted);}
 .prefrow-disabled{opacity:.55; cursor:default;}
 .prefhint{font-style:normal; color:var(--muted); font-weight:500; font-size:12.5px;}
 .streakcard{background:linear-gradient(95deg,#FFF3E0,#FFE8D6); border:1px solid #FFD9B0; border-radius:16px; padding:14px 16px; margin:2px 0 14px;}
