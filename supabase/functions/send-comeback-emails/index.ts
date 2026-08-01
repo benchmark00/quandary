@@ -18,6 +18,28 @@ const admin = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
 );
 
+
+/* ---------------------------------------------------------------------------
+ *  claimSend — the one rule every journey must follow.
+ *
+ *  Record the send BEFORE sending it, and only send if the record was
+ *  accepted. The database refuses records that break the frequency rules, so
+ *  a refused claim means "do not send".
+ * ------------------------------------------------------------------------- */
+async function claimSend(userId: string, emailType: string): Promise<number | null> {
+  const { data, error } = await admin.from("email_log")
+    .insert({ user_id: userId, email_type: emailType })
+    .select("id").single();
+  if (error || !data) {
+    console.log(`skip ${emailType} for ${userId}: ${error ? error.message : "log refused"}`);
+    return null;
+  }
+  return data.id as number;
+}
+async function releaseClaim(id: number) {
+  await admin.from("email_log").delete().eq("id", id);
+}
+
 const FROM = "Quandary <hello@quandary.live>";
 const SITE = "https://quandary.live";
 const FUNCTIONS = `${Deno.env.get("SUPABASE_URL")}/functions/v1`;
@@ -162,6 +184,9 @@ Deno.serve(async (req) => {
         const token = await signToken(c.user_id);
         const unsubUrl = `${FUNCTIONS}/email-unsubscribe?u=${c.user_id}&t=${token}`;
 
+        const claimId = await claimSend(c.user_id, "comeback");
+        if (claimId === null) continue;
+
         const res = await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: { "Authorization": `Bearer ${resendKey}`, "Content-Type": "application/json" },
@@ -174,9 +199,11 @@ Deno.serve(async (req) => {
             html: emailHtml(missed, c.replies_while_away, c.reply_question_title, daysAway, unsubUrl),
           }),
         });
-        if (!res.ok) { console.error("resend failed", c.email, await res.text()); continue; }
-
-        await admin.from("email_log").insert({ user_id: c.user_id, email_type: "comeback" });
+        if (!res.ok) {
+          console.error("resend failed", c.email, await res.text());
+          await releaseClaim(claimId);
+          continue;
+        }
         sent++;
       } catch (e) { console.error("send error", c.email, (e as Error).message); }
     }

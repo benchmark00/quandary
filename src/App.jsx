@@ -4,7 +4,7 @@ import {
   MessageCircle, Star, Flag, Search, ChevronLeft, Check, HelpCircle,
   UserPlus, UserCheck, Send, X, Split, Droplet, Tent, ThumbsDown, Plus, Trash2,
   Share, ArrowRight, Crown, Pencil, Eye, EyeOff, Shield, RefreshCw, Camera,
-  Image as ImageIcon, Globe, Smartphone, Sun, Moon,
+  Image as ImageIcon, Globe, Smartphone, Sun, Moon, ChevronRight,
 } from "lucide-react";
 import { supabase } from "./lib/supabase.js";
 import { enablePush, pushSupported, isStandalone } from "./lib/push.js";
@@ -875,7 +875,24 @@ export default function Quandary() {
     return list;
   }, [questions, feedIds, filter, sort, following, qotdId]);
 
-  const openQ = questions.find((q) => q.id === open);
+  /* Opening a question that isn't in the loaded feed page — from an alert, a
+     notification, or any older item — fetches it on demand rather than
+     silently doing nothing. */
+  const [fetchedQ, setFetchedQ] = useState(null);
+  useEffect(() => {
+    if (!open || questions.some((q) => q.id === open)) { setFetchedQ(null); return undefined; }
+    let live = true;
+    (async () => {
+      const shaped = await loadOneQuestion(open, me);
+      if (!live) return;
+      if (shaped) setFetchedQ(shaped);
+      else { setOpen(null); flash("That question isn't available anymore."); }
+    })();
+    return () => { live = false; };
+  }, [open, questions, me]);
+
+  const openQ = questions.find((q) => q.id === open)
+    || (fetchedQ && fetchedQ.id === open ? fetchedQ : null);
 
   if (loading) return (<div className="q-root"><Style /><div className="phone"><div className="boot"><Logo size={54} /><div>Loading Quandary…</div></div></div></div>);
   if (error) return (<div className="q-root"><Style /><div className="phone"><div className="boot"><div className="booterr">{error}</div><button className="bootbtn" onClick={() => { setLoading(true); loadAll(); }}>Try again</button></div></div></div>);
@@ -1484,6 +1501,21 @@ function Saved({ list, onOpen, saved, onSave, following, onFollow, onUser, me })
 
 /* ---------- ALERTS ---------- */
 function Alerts({ activity, prefs, updatePrefs, onOpen, onUser }) {
+  /* Titles for the questions these alerts point at. They're often older than
+     the loaded feed page, so they're fetched here rather than looked up. */
+  const [titles, setTitles] = useState({});
+  useEffect(() => {
+    const ids = [...new Set(activity.map((a) => a.qId).filter(Boolean))];
+    if (!ids.length) return undefined;
+    let live = true;
+    fetchIn("questions", "id, title", "id", ids).then((rows) => {
+      if (!live) return;
+      const m = {}; rows.forEach((r) => { m[r.id] = r.title; });
+      setTitles(m);
+    });
+    return () => { live = false; };
+  }, [activity]);
+
   const setCat = (k) => {
     const c = new Set(prefs.cats); c.has(k) ? c.delete(k) : c.add(k);
     updatePrefs({ ...prefs, cats: c });
@@ -1543,11 +1575,26 @@ function Alerts({ activity, prefs, updatePrefs, onOpen, onUser }) {
       </div>
       <div className="actfeed">
         <div className="prefsub">Recent activity</div>
-        {activity.map((a) => (
-          <button key={a.id} className="actrow" onClick={() => a.qId ? onOpen(a.qId) : onUser && onUser(a.userId)}>
-            <Avatar id={a.userId} size={32} /><span className="acttext">{line(a)}</span><span className="meta">{ago(a.ts)}</span>
-          </button>
-        ))}
+        {activity.length === 0 && <p className="empty-inline">No activity yet — it'll show up here.</p>}
+        {activity.map((a) => {
+          /* A question that's been deleted has no title; that row still opens
+             the person's profile rather than doing nothing. */
+          const gone = a.qId && titles[a.qId] === undefined && Object.keys(titles).length > 0;
+          return (
+            <button key={a.id} className="actrow" onClick={() => (a.qId && !gone) ? onOpen(a.qId) : onUser && onUser(a.userId)}>
+              <Avatar id={a.userId} size={32} />
+              <span className="acttext">
+                <span className="actline">{line(a)}</span>
+                {a.qId && titles[a.qId] && <span className="actq">“{titles[a.qId]}”</span>}
+                {gone && <span className="actq actgone">That question has since been removed</span>}
+              </span>
+              <span className="actright">
+                <span className="meta">{ago(a.ts)}</span>
+                <ChevronRight size={15} className="actchev" />
+              </span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -1570,6 +1617,78 @@ function useAuthoredQuestions(userId) {
     return () => { live = false; };
   }, [userId]);
   return state;
+}
+
+/* Loads a single question with everything the detail sheet needs, shaped
+   identically to the rows loadAll produces. Used when someone opens a question
+   that isn't part of the currently loaded feed page. */
+async function loadOneQuestion(qId, me) {
+  try {
+    const { data: q } = await supabase.from("questions").select(QUESTION_COLS).eq("id", qId).maybeSingle();
+    if (!q) return null;
+    const [optRes, voteRes, repRes, clarRes, ratRes, myVoteRes] = await Promise.all([
+      supabase.from("question_options").select("id, question_id, label, position").eq("question_id", qId),
+      supabase.from("vote_details").select("question_id, option_id, voter_id").eq("question_id", qId),
+      supabase.from("reply_details").select("id, question_id, author_id, body, created_at").eq("question_id", qId),
+      supabase.from("clarifications").select("id, question_id, asker_id, body, answer_body, answered_at, created_at, hidden").eq("question_id", qId),
+      supabase.from("ratings").select("question_id, rater_id, stars").eq("question_id", qId),
+      supabase.from("votes").select("option_id").eq("question_id", qId).eq("voter_id", me).maybeSingle(),
+    ]);
+    const optRows = optRes.data || [];
+    const voteRows = voteRes.data || [];
+    const repRows = repRes.data || [];
+    const clarRows = clarRes.data || [];
+    const myOptId = myVoteRes.data ? myVoteRes.data.option_id : null;
+
+    const reactionRows = await fetchIn("reactions", "reply_id, user_id, emoji", "reply_id", repRows.map((r) => r.id));
+    const reactByReply = {};
+    reactionRows.forEach((r) => { (reactByReply[r.reply_id] = reactByReply[r.reply_id] || []).push(r); });
+
+    /* Profiles for everyone shown in this thread. */
+    const need = new Set([q.author_id, me]);
+    repRows.forEach((r) => r.author_id && need.add(r.author_id));
+    clarRows.forEach((c) => c.asker_id && need.add(c.asker_id));
+    voteRows.forEach((v) => v.voter_id && need.add(v.voter_id));
+    (await fetchIn("profiles", PROFILE_COLS, "id", [...need])).forEach((pr) => { PROFILES[pr.id] = pr; });
+
+    /* Shaped exactly as loadAll shapes its rows — anonymous voters stay as
+       null placeholders, and my own vote is patched in when the poll is
+       anonymous so the UI can still show which option I picked. */
+    const options = optRows.sort((a, b) => a.position - b.position).map((o) => {
+      const rows = voteRows.filter((v) => v.option_id === o.id);
+      const real = rows.filter((v) => v.voter_id).map((v) => v.voter_id);
+      const nulls = rows.length - real.length;
+      const voters = [...real, ...Array(nulls).fill(null)];
+      if (myOptId === o.id && !real.includes(me)) {
+        const ni = voters.indexOf(null);
+        if (ni >= 0) voters[ni] = me; else voters.push(me);
+      }
+      return { id: o.id, text: o.label, voters };
+    });
+
+    const replies = repRows.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
+      .map((r) => {
+        const rr = reactByReply[r.id] || [];
+        const counts = {}; let mine = null;
+        rr.forEach((x) => { counts[x.emoji] = (counts[x.emoji] || 0) + 1; if (x.user_id === me) mine = x.emoji; });
+        return { id: r.id, userId: r.author_id, text: r.body, ts: Date.parse(r.created_at), reactions: counts, myReaction: mine };
+      });
+
+    const clarifs = clarRows.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
+      .map((c) => ({ id: c.id, userId: c.asker_id, text: c.body, ts: Date.parse(c.created_at), hidden: c.hidden,
+        answer: c.answer_body ? { text: c.answer_body, ts: Date.parse(c.answered_at || c.created_at) } : null }));
+
+    const ratings = {}; (ratRes.data || []).forEach((r) => { ratings[r.rater_id] = r.stars; });
+
+    return {
+      id: q.id, authorId: q.author_id, flair: q.flair, format: q.format,
+      anon: q.anonymous, anonReplies: q.anonymous_replies, hidden: q.hidden,
+      excludeSeo: q.exclude_seo, slug: q.slug,
+      title: q.title, body: q.body || "",
+      options, replies, clarifs, ratings, reported: false,
+      ts: Date.parse(q.created_at),
+    };
+  } catch { return null; }
 }
 
 /* ---------- APPEARANCE (night mode) ---------- */
@@ -2170,8 +2289,7 @@ html[data-theme="dark"] .wm-swap .wm-dark{display:inline-block;}
 .prefrow{display:flex; align-items:center; gap:10px; padding:8px 0; font-size:14.5px; cursor:pointer;}
 .prefrow input{accent-color:var(--purple); width:18px; height:18px;}
 .prefsub{font-family:var(--disp); font-weight:600; font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; margin:14px 0 10px;}
-.actrow{display:flex; align-items:center; gap:11px; width:100%; background:none; border:none; border-bottom:1px solid var(--line); padding:12px 2px; cursor:pointer; text-align:left;}
-.acttext{flex:1; font-size:14px; color:var(--ink);}
+.actrow{display:flex; align-items:center; gap:11px; width:100%; background:none; border:none; border-bottom:1px solid var(--line); padding:12px 2px; cursor:pointer; text-align:left; font-family:var(--body); color:var(--ink);}
 
 /* profile */
 .profhead{display:flex; align-items:center; gap:16px; margin-bottom:18px;}
@@ -2181,6 +2299,12 @@ html[data-theme="dark"] .wm-swap .wm-dark{display:inline-block;}
 .themebtn{flex:1; display:flex; flex-direction:column; align-items:center; gap:5px; background:var(--lav); border:1.5px solid var(--line); color:var(--muted); padding:12px 8px; border-radius:14px; font-weight:700; font-size:12.5px; cursor:pointer; font-family:var(--body);}
 .themebtn.on{background:var(--purple); border-color:var(--purple); color:#fff;}
 .soundrow{margin-top:12px;}
+.acttext{display:flex; flex-direction:column; gap:2px; min-width:0; flex:1; text-align:left;}
+.actline{font-size:13.5px; line-height:1.35;}
+.actq{font-size:12.5px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.actgone{font-style:italic; opacity:.8;}
+.actright{display:flex; align-items:center; gap:4px; flex-shrink:0;}
+.actchev{color:var(--muted); opacity:.7;}
 .loadmore{display:block; width:100%; margin:14px 0 4px; background:var(--surface); border:1.5px solid var(--line); color:var(--purple); font-family:var(--body); font-weight:700; font-size:14px; padding:13px; border-radius:14px; cursor:pointer;}
 .loadmore:disabled{opacity:.6; cursor:default;}
 .vmore{color:var(--muted);}

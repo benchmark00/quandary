@@ -16,6 +16,33 @@ const admin = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
 );
 
+
+/* ---------------------------------------------------------------------------
+ *  claimSend — the one rule every journey must follow.
+ *
+ *  Record the send BEFORE sending it, and only send if the record was
+ *  accepted. The database refuses records that break the frequency rules, so
+ *  a refused claim means "do not send".
+ *
+ *  The old pattern (send first, log afterwards, never check the result) meant
+ *  a failed log write was invisible: the email went out, nothing recorded it,
+ *  and the person qualified again on the next run. Every run. That is how the
+ *  repeated emails happened.
+ * ------------------------------------------------------------------------- */
+async function claimSend(userId: string, emailType: string): Promise<number | null> {
+  const { data, error } = await admin.from("email_log")
+    .insert({ user_id: userId, email_type: emailType })
+    .select("id").single();
+  if (error || !data) {
+    console.log(`skip ${emailType} for ${userId}: ${error ? error.message : "log refused"}`);
+    return null;
+  }
+  return data.id as number;
+}
+async function releaseClaim(id: number) {
+  await admin.from("email_log").delete().eq("id", id);
+}
+
 const FROM = "Quandary <hello@quandary.live>";
 const SITE = "https://quandary.live";
 const FUNCTIONS = `${Deno.env.get("SUPABASE_URL")}/functions/v1`;
@@ -139,6 +166,8 @@ Deno.serve(async (req) => {
       try {
         const token = await signToken(c.user_id);
         const unsubUrl = `${FUNCTIONS}/email-unsubscribe?u=${c.user_id}&t=${token}`;
+        const claimId = await claimSend(c.user_id, emailType);
+        if (claimId === null) continue;
         const res = await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: { "Authorization": `Bearer ${resendKey}`, "Content-Type": "application/json" },
@@ -148,8 +177,11 @@ Deno.serve(async (req) => {
             html: digestHtml(topQs, c, unsubUrl),
           }),
         });
-        if (!res.ok) { console.error("resend failed", c.email, await res.text()); continue; }
-        await admin.from("email_log").insert({ user_id: c.user_id, email_type: emailType });
+        if (!res.ok) {
+          console.error("resend failed", c.email, await res.text());
+          await releaseClaim(claimId);
+          continue;
+        }
         sent++;
       } catch (e) { console.error("send error", c.email, (e as Error).message); }
     }

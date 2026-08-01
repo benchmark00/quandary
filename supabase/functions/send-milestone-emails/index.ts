@@ -14,6 +14,33 @@ const admin = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
 );
 
+
+/* ---------------------------------------------------------------------------
+ *  claimSend — the one rule every journey must follow.
+ *
+ *  Record the send BEFORE sending it, and only send if the record was
+ *  accepted. The database refuses records that break the frequency rules, so
+ *  a refused claim means "do not send".
+ *
+ *  The old pattern (send first, log afterwards, never check the result) meant
+ *  a failed log write was invisible: the email went out, nothing recorded it,
+ *  and the person qualified again on the next run. Every run. That is how the
+ *  repeated emails happened.
+ * ------------------------------------------------------------------------- */
+async function claimSend(userId: string, emailType: string): Promise<number | null> {
+  const { data, error } = await admin.from("email_log")
+    .insert({ user_id: userId, email_type: emailType })
+    .select("id").single();
+  if (error || !data) {
+    console.log(`skip ${emailType} for ${userId}: ${error ? error.message : "log refused"}`);
+    return null;
+  }
+  return data.id as number;
+}
+async function releaseClaim(id: number) {
+  await admin.from("email_log").delete().eq("id", id);
+}
+
 const FROM = "Quandary <hello@quandary.live>";
 const SITE = "https://quandary.live";
 const FUNCTIONS = `${Deno.env.get("SUPABASE_URL")}/functions/v1`;
@@ -103,6 +130,8 @@ Deno.serve(async (req) => {
             <p style="color:#0D0F1A;font-size:16px;font-weight:700;line-height:1.35;margin:0;">${esc(m.question_title)}</p>
           </td></tr>
           <tr><td style="height:22px;"></td></tr>`;
+        const claimId = await claimSend(m.user_id, `milestone_q:${m.question_id}:${m.threshold}`);
+        if (claimId === null) continue;
         const ok = await send(
           m.email,
           `Your question hit ${m.threshold} votes! 🎉`,
@@ -112,11 +141,7 @@ Deno.serve(async (req) => {
             inner, "See the results", `${SITE}/q/${m.question_id}`, unsubUrl,
           ),
         );
-        if (!ok) continue;
-        await admin.from("email_log").insert({
-          user_id: m.user_id,
-          email_type: `milestone_q:${m.question_id}:${m.threshold}`,
-        });
+        if (!ok) { await releaseClaim(claimId); continue; }
         voteSent++;
       } catch (e) { console.error("vote milestone error", m.email, (e as Error).message); }
     }
@@ -144,6 +169,8 @@ Deno.serve(async (req) => {
                 <div style="color:#6E6E86;font-size:12px;margin-top:5px;">replies received</div></td>
             </tr></table>
           </td></tr>`;
+        const claimId = await claimSend(a.user_id, "milestone_month");
+        if (claimId === null) continue;
         const ok = await send(
           a.email,
           "You've been debating for a month 🎉",
@@ -153,8 +180,7 @@ Deno.serve(async (req) => {
             inner, "Ask something impossible", SITE, unsubUrl,
           ),
         );
-        if (!ok) continue;
-        await admin.from("email_log").insert({ user_id: a.user_id, email_type: "milestone_month" });
+        if (!ok) { await releaseClaim(claimId); continue; }
         annivSent++;
       } catch (e) { console.error("anniversary error", a.email, (e as Error).message); }
     }
