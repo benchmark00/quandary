@@ -400,6 +400,11 @@ html[data-theme="dark"] .auth-spam{ background:#2E2408; border-color:#4A3A10; }
 html[data-theme="dark"] .auth-spam b{ color:#F0C060; }
 html[data-theme="dark"] .auth-spam span{ color:#D4A94E; }
 html[data-theme="dark"] .auth-title{ color:#EDEDF4; }
+/* Placeholders had no rule, so they used the browser default — too dark to
+   read against the dark input fields. */
+.auth-in::placeholder{color:#9A9AAd; opacity:1;}
+html[data-theme="dark"]{color-scheme:dark;}
+html[data-theme="dark"] .auth-in::placeholder{color:#8A8AA0; opacity:1;}
 html[data-theme="dark"] .auth-in{ background:#15151E; border-color:#33333F; color:#EDEDF4; }
 html[data-theme="dark"] .auth-in:focus{ border-color:#9B84FF; background:#1E1E29; }
 html[data-theme="dark"] .auth-div:before,html[data-theme="dark"] .auth-div:after{ background:#33333F; }

@@ -2083,7 +2083,7 @@ function Style() {
 .q-root{
   --ink:#0D0F1A; --purple:#6C4DFF; --pink:#FF4DB8; --orange:#FF9F1C;
   --yellow:#FFD93D; --teal:#21D4C3; --lav:#F2F3FF; --white:#FFFFFF;
-  --muted:#6E6E86; --line:#E7E7F3; --surface:#FFFFFF;
+  --muted:#6A6A80; --line:#E7E7F3; --surface:#FFFFFF;
   --disp:'Fredoka',system-ui,sans-serif; --body:'Plus Jakarta Sans',system-ui,sans-serif;
   display:flex; justify-content:center; align-items:flex-start; min-height:100vh;
   background:linear-gradient(180deg,#EDEBFF 0%, #F4F2FF 40%, #FCFBFF 100%); font-family:var(--body);
@@ -2231,7 +2231,7 @@ html[data-theme="dark"] .wm-swap .wm-dark{display:inline-block;}
 .clar-answer{margin:8px 0 0 30px; background:var(--purple); color:#fff; border:none; padding:7px 14px; border-radius:999px; font-weight:700; font-size:12.5px; cursor:pointer; font-family:var(--body);}
 .clar-pending{display:inline-block; margin:8px 0 0 30px; font-size:12px; color:var(--muted); font-style:italic;}
 .clar-answerbox{display:flex; gap:7px; margin:8px 0 0 30px;}
-.clar-answerbox input{flex:1; background:var(--lav); border:1.5px solid var(--line); border-radius:999px; padding:8px 13px; font-size:13px; outline:none; font-family:var(--body);}
+.clar-answerbox input{flex:1; background:var(--lav); border:1.5px solid var(--line); border-radius:999px; padding:8px 13px; font-size:13px; outline:none; font-family:var(--body); color:var(--ink);}
 .clar-answerbox input:focus{border-color:var(--purple);}
 
 .ratebar{display:flex; align-items:center; justify-content:space-between; margin:16px 0 4px; padding:13px 15px; background:var(--white); border:1px solid var(--line); border-radius:14px;}
@@ -2305,6 +2305,58 @@ html[data-theme="dark"] .wm-swap .wm-dark{display:inline-block;}
 .actgone{font-style:italic; opacity:.8;}
 .actright{display:flex; align-items:center; gap:4px; flex-shrink:0;}
 .actchev{color:var(--muted); opacity:.7;}
+/* ---------- dark mode readability ----------
+   Everything below fixes text that was hardcoded for a light background.
+   The rule of thumb applied: text colour should either come from a variable
+   (which flips with the theme) or be paired with a background that never
+   changes (e.g. white on the purple gradient buttons). */
+
+/* Inputs inherit the browser's default text colour unless told otherwise,
+   which is black — unreadable on a dark field. Belt and braces across all of
+   them, plus a visible placeholder colour, which had no rule at all. */
+input, textarea, select, button{color:inherit;}
+input::placeholder, textarea::placeholder{color:var(--muted); opacity:1;}
+html[data-theme="dark"] input::placeholder,
+html[data-theme="dark"] textarea::placeholder{color:#8A8AA0; opacity:1;}
+/* Lets the OS draw checkboxes, scrollbars and autofill correctly. */
+html[data-theme="dark"]{color-scheme:dark;}
+html[data-theme="dark"] .clar-answerbox input,
+html[data-theme="dark"] .composer input,
+html[data-theme="dark"] .fld textarea,
+html[data-theme="dark"] .optrow input,
+html[data-theme="dark"] .editbox textarea,
+html[data-theme="dark"] .handlebox input,
+html[data-theme="dark"] .search-head input{color:var(--ink); caret-color:var(--purple);}
+html[data-theme="dark"] .clar-answerbox input,
+html[data-theme="dark"] .composer input{background:#15151E;}
+html[data-theme="dark"] .fld textarea,
+html[data-theme="dark"] .optrow input,
+html[data-theme="dark"] .editbox textarea{background:#15151E;}
+
+/* Status colours: the light-mode pink/green are too dark to read on a dark
+   surface, so each gets a lighter equivalent of the same hue. */
+html[data-theme="dark"] .push-msg.err{color:#FF7FAE;}
+html[data-theme="dark"] .signout-btn{color:#FF7FAE; border-color:#4A2436;}
+html[data-theme="dark"] .replydel{color:#6E6E86;}
+html[data-theme="dark"] .replydel:hover{color:#FF7FAE;}
+html[data-theme="dark"] .confirm-del{background:#B3164F; color:#fff;}
+html[data-theme="dark"] .starbtn{color:#3A3A4A;}
+html[data-theme="dark"] .starbtn.on{color:var(--yellow);}
+
+/* Tinted surfaces built from a translucent purple over white — on a dark
+   background they came out nearly invisible. */
+html[data-theme="dark"] .all-pill{background:#6c4dff26;}
+html[data-theme="dark"] .followmini.on{background:#6c4dff33;}
+html[data-theme="dark"] .actbtn.on{background:#6c4dff26;}
+html[data-theme="dark"] .seg.on{background:#6c4dff26;}
+html[data-theme="dark"] .as-stat.sel{background:#6c4dff26;}
+html[data-theme="dark"] .adminchip{background:#6c4dff33;}
+html[data-theme="dark"] .reactchip.on{background:#6c4dff33;}
+html[data-theme="dark"] .reactchip:hover{border-color:#4A4A5A;}
+html[data-theme="dark"] .clar-a{background:#6c4dff1f;}
+html[data-theme="dark"] .addopt{border-color:#3A3A4A;}
+html[data-theme="dark"] .onb{background:linear-gradient(180deg,#101018 0%, #16161F 60%);}
+
 .loadmore{display:block; width:100%; margin:14px 0 4px; background:var(--surface); border:1.5px solid var(--line); color:var(--purple); font-family:var(--body); font-weight:700; font-size:14px; padding:13px; border-radius:14px; cursor:pointer;}
 .loadmore:disabled{opacity:.6; cursor:default;}
 .vmore{color:var(--muted);}
